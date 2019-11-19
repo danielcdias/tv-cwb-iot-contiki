@@ -1,7 +1,8 @@
 *.a
+*.o
+*.bak
 *.bin
 *.map
-*.png
 *.log
 *.elf
 *.zip
@@ -40,7 +41,6 @@ summary
 .DS_Store
 obj_*
 symbols.*
-Makefile.target
 doc/html
 doc/latex
 patches-*
@@ -129,3 +129,10 @@ LOG_OPENOCD
 # nRF52 build artifacts
 *.jlink
 *.nrf52dk
+
+# CCS project files
+.
+.project
+.cproject
+.settings
+

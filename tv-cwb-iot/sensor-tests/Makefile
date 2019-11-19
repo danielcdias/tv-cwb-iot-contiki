@@ -5,5 +5,5 @@ all: $(CONTIKI_PROJECT)
 
 PROJECT_SOURCEFILES += util.c pluv-sensor.c
 
-CONTIKI = ../../../..
+CONTIKI = ../..
 include $(CONTIKI)/Makefile.include
