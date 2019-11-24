@@ -1,9 +1,9 @@
 /**
- * File:   pluv-sensor.c
+ * File:   interruption-sensor.c
  * Author: Daniel Carvalho Dias (daniel.dias@gmail.com)
- * Date:   11/05/2019
+ * Date:   28/05/2019
  *
- * Configures pluviometer sensor to work with interruptions (as a button).
+ * Implementation a sensor that works via interruptions (as a button).
  *
  */
 
@@ -22,17 +22,11 @@
 #include "launchpad/button-sensor.h"
 #include "launchpad/bmp-280-sensor.h"
 
-#include "util.h"
-#include "pluv-sensor.h"
+#include "interruption-sensor.h"
 
-/**************************************************************************
- * Definitions for pluviometer sensor works with interruption (as a button)
- **************************************************************************/
-//#ifdef BUTTON_SENSOR_CONF_ENABLE_SHUTDOWN
-//#define BUTTON_SENSOR_ENABLE_SHUTDOWN BUTTON_SENSOR_CONF_ENABLE_SHUTDOWN
-//#else
-//#define BUTTON_SENSOR_ENABLE_SHUTDOWN 1
-//#endif
+/*******************************************************************
+ * Definitions for sensor that works via  interruption (as a button)
+ *******************************************************************/
 
 #define INTERRUPTION_GPIO_CFG   (IOC_CURRENT_2MA  | IOC_STRENGTH_AUTO | \
                                  IOC_IOPULL_UP    | IOC_SLEW_DISABLE  | \
@@ -51,36 +45,32 @@ struct interruption_timer {
   clock_time_t duration;
 };
 
-static struct interruption_timer pluv_timer;
+static struct interruption_timer irq_timer;
 
-/***************************************************************
- * Functions for pluviometer interruption (event) implementation
- ***************************************************************/
+/***************************************************
+ * Functions for interruption (event) implementation
+ ***************************************************/
 
-static void pluviometer_event_handler(uint8_t ioid) {
+static void interruption_event_handler(uint8_t ioid) {
 
-  if(ioid == PLUVIOMETER_SENSOR) {
-//    if(BUTTON_SENSOR_ENABLE_SHUTDOWN == 0) {
-      if (!timer_expired(&pluv_timer.debounce)) {
+  if(ioid == INTERRUPTION_SENSOR_PORT) {
+      if (!timer_expired(&irq_timer.debounce)) {
         return;
       }
 
-      timer_set(&pluv_timer.debounce, INTERRUPTION_DEBOUNCE_DURATION);
+      timer_set(&irq_timer.debounce, INTERRUPTION_DEBOUNCE_DURATION);
 
       /*
        * Start press duration counter on press (falling), notify on release
        * (rising)
        */
-      if (ti_lib_gpio_read_dio(PLUVIOMETER_SENSOR) == 0) {
-        pluv_timer.start = clock_time();
-        pluv_timer.duration = 0;
+      if (ti_lib_gpio_read_dio(INTERRUPTION_SENSOR_PORT) == 0) {
+        irq_timer.start = clock_time();
+        irq_timer.duration = 0;
       } else {
-        pluv_timer.duration = clock_time() - pluv_timer.start;
-        sensors_changed(&pluviometer_sensor);
+        irq_timer.duration = clock_time() - irq_timer.start;
+        sensors_changed(&interruption_sensor);
       }
-//    } else {
-//      lpm_shutdown(PLUVIOMETER_SENSOR, IOC_IOPULL_UP, IOC_WAKE_ON_LOW);
-//    }
   }
 
 }
@@ -91,7 +81,7 @@ static void config_interuptions(int type, int c, uint32_t key) {
     ti_lib_gpio_clear_event_dio(key);
     ti_lib_rom_ioc_pin_type_gpio_input(key);
     ti_lib_rom_ioc_port_configure_set(key, IOC_PORT_GPIO, INTERRUPTION_GPIO_CFG);
-    gpio_interrupt_register_handler(key, pluviometer_event_handler);
+    gpio_interrupt_register_handler(key, interruption_event_handler);
     break;
   case SENSORS_ACTIVE:
     if (c) {
@@ -108,8 +98,8 @@ static void config_interuptions(int type, int c, uint32_t key) {
   }
 }
 
-static int config_pluviometer(int type, int value) {
-  config_interuptions(type, value, PLUVIOMETER_SENSOR);
+static int config_sensor(int type, int value) {
+  config_interuptions(type, value, INTERRUPTION_SENSOR_PORT);
 
   return 1;
 }
@@ -131,22 +121,22 @@ static int status(int type, uint32_t key_io_id) {
 static int value_interruption(int type) {
   if (type == INTERRUPTION_SENSOR_VALUE_STATE) {
     return
-    ti_lib_gpio_read_dio(PLUVIOMETER_SENSOR) == 0 ?
+    ti_lib_gpio_read_dio(INTERRUPTION_SENSOR_PORT) == 0 ?
         INTERRUPTION_SENSOR_VALUE_PRESSED : INTERRUPTION_SENSOR_VALUE_RELEASED;
   } else if (type == INTERRUPTION_SENSOR_VALUE_DURATION) {
-    return (int) pluv_timer.duration;
+    return (int) irq_timer.duration;
   }
   return 0;
 }
 
 static int status_interruption(int type) {
-  return status(type, PLUVIOMETER_SENSOR);
+  return status(type, INTERRUPTION_SENSOR_PORT);
 }
 
 /**
- * Declaring Pluviometer as an interruption sensor.
+ * Declaring the interruption sensor.
  */
-SENSORS_SENSOR(pluviometer_sensor, INTERRUPTION_SENSOR, value_interruption, config_pluviometer,
+SENSORS_SENSOR(interruption_sensor, INTERRUPTION_SENSOR, value_interruption, config_sensor,
    status_interruption);
 
-SENSORS(&button_left_sensor, &button_right_sensor, &bmp_280_sensor, &adc_sensor, &pluviometer_sensor);
+SENSORS(&button_left_sensor, &button_right_sensor, &bmp_280_sensor, &adc_sensor, &interruption_sensor);

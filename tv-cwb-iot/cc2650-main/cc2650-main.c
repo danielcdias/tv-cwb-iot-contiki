@@ -1043,7 +1043,6 @@ PROCESS_THREAD(request_timestamp_update, ev, data) {
    static struct etimer et;
    static uint32_t counter = 0;
 
-   // TODO Verificar porque não envia se intervalo setado para 1 dia
    while ((!is_rebooting) && (is_connected)) {
       etimer_set(&et, CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);

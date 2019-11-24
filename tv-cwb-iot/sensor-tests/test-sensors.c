@@ -8,80 +8,97 @@
  */
 
 #include <stdio.h>
+#include <stdbool.h>
 
 #include "contiki.h"
 #include "sys/etimer.h"
 #include "lib/sensors.h"
 #include "button-sensor.h"
 
-#include "util.h"
-#include "pluv-sensor.h"
+#include "sensors-helper.h"
+#include "temp-sensor-helper.h"
+#include "interruption-sensor.h"
 
 /******************
  * Global variables
  ******************/
 
-static struct etimer et_rainSensors, et_pluviometer, et_moistureSensor;
+static struct etimer et_rainCapacitiveDrainSensor, et_rainOpticSensor, et_pluviometer, et_moistureSensor, et_temperatureSensor;
 
 /**********************
  * Processes definition
  **********************/
 
-PROCESS(testRainSensors, "testRainSensors");
+PROCESS(testRainCapacitiveDrainSensor, "testRainCapacitiveDrainSensor");
+PROCESS(testRainOpticalSensor, "testRainOpticalSensor");
 PROCESS(testPluviometerSensor, "testPluviometerSensor");
 PROCESS(testMoistureSensor, "testMoistureSensor");
-AUTOSTART_PROCESSES(&testRainSensors, &testPluviometerSensor, &testMoistureSensor);
-//AUTOSTART_PROCESSES(&testRainSensors);
+PROCESS(testTemperatureSensor, "testTemperatureSensor");
+//AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor, &testRainOpticSensor, &testPluviometerSensor, &testMoistureSensor, &testTemperatureSensor);
+//AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor);
 //AUTOSTART_PROCESSES(&testPluviometerSensor);
+//AUTOSTART_PROCESSES(&testRainOpticalSensor);
 //AUTOSTART_PROCESSES(&testMoistureSensor);
-//AUTOSTART_PROCESSES(&testRainSensors,&testPluviometerSensor);
+//AUTOSTART_PROCESSES(&testTemperatureSensor);
+AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor, &testRainOpticalSensor, &testTemperatureSensor);
 
 /**************************
  * Processes implementation
  **************************/
 
-PROCESS_THREAD(testRainSensors, ev, data) {
+PROCESS_THREAD(testRainCapacitiveDrainSensor, ev, data) {
+   PROCESS_BEGIN();
+
+   etimer_set(&et_rainCapacitiveDrainSensor, 4 * CLOCK_SECOND);
+   PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_rainCapacitiveDrainSensor);
+
+   printf("# %s # ---------- Starting Rain on Drain Sensor test...\n", SENSOR_RAIN_DRAIN);
+
+   static bool is_raining = false, previous = false;
+
+   while (true) {
+
+      uint32_t value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
+      is_raining = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
+      if (previous ^ is_raining) {
+         previous = is_raining;
+         printf((is_raining ? "# %s # Water on drain DETECTED!\n" : "# %s # Water on drain detection STOPPED!\n"), SENSOR_RAIN_DRAIN);
+      }
+
+      etimer_set(&et_rainCapacitiveDrainSensor, 0.1 * CLOCK_SECOND);
+      PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_rainCapacitiveDrainSensor);
+   }
+
+   PROCESS_END();
+}
+
+PROCESS_THREAD(testRainOpticalSensor, ev, data) {
     PROCESS_BEGIN();
 
-    etimer_set(&et_rainSensors, 4 * CLOCK_SECOND);
-    PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_rainSensors);
+    etimer_set(&et_rainOpticSensor, 4 * CLOCK_SECOND);
+    PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_rainOpticSensor);
 
-    printf("#1# ---------- Starting Rain Sensors test...\n");
+    if (readGPIOSensor(JUMPER_PLUVIOMETER_INSTALLED) != PLUVIOMETER_INSTALLED) {
 
-    static int lastValueRead1, lastValueRead2, lastValueRead3, lastValueRead4, lastValueRead5;
+       printf("# %s # ---------- Starting Optical Rain sensor test...\n", SENSOR_OPTICAL_RAIN);
+       SENSORS_ACTIVATE(interruption_sensor);
 
-    configureGPIOSensors();
-    while (1) {
-        static int valueRead;
-        valueRead = readGPIOSensor(RAIN_SENSOR_SURFACE_1);
-        if (valueRead != lastValueRead1) {
-            printf("#1# Rain sensor surface 1 - Value changed = %d\n", valueRead);
-            lastValueRead1 = valueRead;
-        }
-        valueRead = readGPIOSensor(RAIN_SENSOR_SURFACE_2);
-        if (valueRead != lastValueRead2) {
-            printf("#1# Rain sensor surface 2 - Value changed = %d\n", valueRead);
-            lastValueRead2 = valueRead;
-        }
-        valueRead = readGPIOSensor(RAIN_SENSOR_SURFACE_3);
-        if (valueRead != lastValueRead3) {
-            printf("#1# Rain sensor surface 3 - Value changed = %d\n", valueRead);
-            lastValueRead3 = valueRead;
-        }
-        valueRead = readGPIOSensor(RAIN_SENSOR_SURFACE_4);
-        if (valueRead != lastValueRead4) {
-            printf("#1# Rain sensor surface 4 - Value changed = %d\n", valueRead);
-            lastValueRead4 = valueRead;
-        }
-        valueRead = readGPIOSensor(RAIN_SENSOR_DRAIN);
-        if (valueRead != lastValueRead5) {
-            printf("#1# Rain sensor drain - Value changed = %d\n", valueRead);
-            lastValueRead5 = valueRead;
-        }
-        etimer_set(&et_rainSensors, RAIN_SENSORS_READ_INTERVAL * CLOCK_SECOND);
-        PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_rainSensors);
+       static uint32_t counter = 0;
+
+       while (true) {
+           PROCESS_YIELD();
+
+           if(ev == sensors_event) {
+               if(data == &interruption_sensor) {
+                  counter++;
+                  printf("# %s # Optical Reain sensor received an event. Total: %lu\n", SENSOR_OPTICAL_RAIN, counter);
+               }
+           }
+       }
+
+       SENSORS_DEACTIVATE(interruption_sensor);
+
     }
-
     PROCESS_END();
 }
 
@@ -91,20 +108,28 @@ PROCESS_THREAD(testPluviometerSensor, ev, data) {
     etimer_set(&et_pluviometer, 4 * CLOCK_SECOND);
     PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_pluviometer);
 
-    printf("#2# ---------- Starting pluviometer sensor test...\n");
-    SENSORS_ACTIVATE(pluviometer_sensor);
+    if (readGPIOSensor(JUMPER_PLUVIOMETER_INSTALLED) == PLUVIOMETER_INSTALLED) {
 
-    while(1) {
-        PROCESS_YIELD();
+       printf("# %s # ---------- Pluviometric sensor test...\n", SENSOR_OPTICAL_RAIN);
+       SENSORS_ACTIVATE(interruption_sensor);
 
-        if(ev == sensors_event) {
-            if(data == &pluviometer_sensor) {
-                printf("#2# Pluviometer Sensor event received!\n");
-            }
-        }
+       uint32_t counter = 0;
+
+       while (true) {
+           PROCESS_YIELD();
+
+           if(ev == sensors_event) {
+               if(data == &interruption_sensor) {
+                  counter++;
+                  printf("# %s # Pluviometric sensor received an event. Total: %lu\n", SENSOR_OPTICAL_RAIN, counter);
+               }
+           }
+       }
+
+       SENSORS_DEACTIVATE(interruption_sensor);
+
     }
 
-    SENSORS_DEACTIVATE(pluviometer_sensor);
     PROCESS_END();
 }
 
@@ -114,14 +139,33 @@ PROCESS_THREAD(testMoistureSensor, ev, data) {
     etimer_set(&et_moistureSensor, 4 * CLOCK_SECOND);
     PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_moistureSensor);
 
-    printf("#3# ---------- Starting Moisture Sensors (ADC) test...\n");
+    printf("# %s # ---------- Soil Moisture sensor test...\n", SENSOR_CAPACITIVE_SOIL_MOISTURE);
 
-    while (1) {
+    while (true) {
 
-        printf("#3# Moisture sensor reading at pin %i - value read: %i\n", MOISTURE_SENSOR, readADSMoistureSensor());
+        printf("# %s # Moisture sensor reading - value read: %lu\n", SENSOR_CAPACITIVE_SOIL_MOISTURE, readADSSensor(MOISTURE_SENSOR));
 
-        etimer_set(&et_moistureSensor, MOISTURE_SENSOR_READ_INTERVAL * CLOCK_SECOND);
+        etimer_set(&et_moistureSensor, MOISTURE_TEMP_READ_INTERVAL * CLOCK_SECOND);
         PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_moistureSensor);
+    }
+
+    PROCESS_END();
+}
+
+PROCESS_THREAD(testTemperatureSensor, ev, data) {
+    PROCESS_BEGIN();
+
+    etimer_set(&et_temperatureSensor, 4 * CLOCK_SECOND);
+    PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_temperatureSensor);
+
+    printf("# %s # ---------- Temperature sensor test...\n", SENSOR_TEMPERATURE);
+
+    while (true) {
+
+        printf("# %s # Temperature - value read: %i\n", SENSOR_TEMPERATURE, readTemperatureSensor(TEMPERATURE_SENSOR));
+
+        etimer_set(&et_temperatureSensor, MOISTURE_TEMP_READ_INTERVAL * CLOCK_SECOND);
+        PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_temperatureSensor);
     }
 
     PROCESS_END();

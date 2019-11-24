@@ -20,8 +20,8 @@
 #include "dev/adc-sensor.h"
 #include "lib/sensors.h"
 
-#ifndef UTIL_H_
-#define UTIL_H_
+#ifndef SENSORS_HELP_H_
+#define SENSORS_HELP_H_
 
 /******************************************************************************
  * Definitions of port numbers and reading intervals

@@ -1,17 +1,29 @@
-#include "contiki.h"
-#include "ti-lib.h"
-#include "ioc.h"
+/**
+ * File:   temp-sensor-helper.c
+ * Author: Daniel Carvalho Dias (daniel.dias@gmail.com)
+ * Date:   12/07/2019
+ *
+ * Implements the temp-sensor-helper.h interface to configure and read from
+ * temperature sensors used by the CC2650 board.
+ *
+ * The temperature sensor DS18b20 uses a GPIO port and the reading will be
+ * performed by pooling.
+ *
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
 
-#define DS18B20_COMMAND_READ_SCRATCH_PAD 0xBE
-#define DS18B20_COMMAND_START_CONVERSION 0x44
-#define DS18B20_COMMAND_SKIP_ROM 0xCC
-#define DS18B20_PORT IOID_23
+#include "contiki.h"
+#include "ti-lib.h"
+#include "ioc.h"
 
-PROCESS(ds18b20, "ds18b20");
-AUTOSTART_PROCESSES(&ds18b20);
+#include "temp-sensor-helper.h"
+
+/******************************************************************************
+ * Internal functions definitions
+ ******************************************************************************/
 
 void OW_SET_OUTPUT() {
    ti_lib_rom_ioc_pin_type_gpio_output(DS18B20_PORT);
@@ -21,22 +33,6 @@ void OW_SET_OUTPUT() {
 void OW_SET_INPUT() {
    ti_lib_rom_ioc_pin_type_gpio_input(DS18B20_PORT);
    IOCIOPortPullSet(DS18B20_PORT, IOC_IOPULL_UP); //IOC_IOPULL_UP IOC_NO_IOPULL IOC_IOPULL_DOWN
-}
-
-uint8_t ds18b20_probe(void) {
-   uint8_t result = 0;
-   OW_SET_OUTPUT();
-   clock_delay_usec(480);
-   OW_SET_INPUT();
-   clock_delay_usec(64);
-   result = !GPIO_readDio(DS18B20_PORT); //OW_GET_PIN_STATE()
-   //printf("ds18b20_probe result (1): %i\n", result);
-   if (result) {
-      clock_delay_usec(300);
-      result = GPIO_readDio(DS18B20_PORT); //OW_GET_PIN_STATE()
-   }
-   //printf("ds18b20_probe result (2): %i\n", result);
-   return result;
 }
 
 void write_bit(uint8_t bit) {
@@ -105,6 +101,24 @@ uint8_t crc8_ds18b20(uint8_t *buf, uint8_t buf_len) {
    return result;
 }
 
+/******************************************************************************
+ * Interface functions definitions
+ ******************************************************************************/
+
+uint8_t ds18b20_probe(void) {
+   uint8_t result = 0;
+   OW_SET_OUTPUT();
+   clock_delay_usec(480);
+   OW_SET_INPUT();
+   clock_delay_usec(64);
+   result = !GPIO_readDio(DS18B20_PORT); //OW_GET_PIN_STATE()
+   if (result) {
+      clock_delay_usec(300);
+      result = GPIO_readDio(DS18B20_PORT); //OW_GET_PIN_STATE()
+   }
+   return result;
+}
+
 uint8_t ds18b20_get_temp(float *temp1) {
    uint8_t result = 0;
    float temp_c;
@@ -167,37 +181,4 @@ uint8_t ds18b20_get_temp(float *temp1) {
       result = 1;
    }
    return result;
-}
-
-PROCESS_THREAD(ds18b20, ev, data) {
-   static struct etimer periodic;
-   float temp;
-   int ret;
-
-   PROCESS_BEGIN();
-
-   printf("Contiki CC26xx/CC1310 DS18B20 Temp Sensor using DIO23 \n\n");
-
-   while (1) {
-      etimer_set(&periodic, CLOCK_SECOND * 3);
-
-      ret = ds18b20_probe();
-      if (ret == 0) {
-         printf("Error Resetting\n");
-      }
-
-      ret = ds18b20_get_temp(&temp);
-      if (ret == 1) {
-         printf("Temp= %ld.%-1.2u\n", (long) temp,
-                (unsigned) ((temp - floor(temp)) * 100));
-      } //2 digits
-      if (ret == 0) {
-         //printf("Error Reading. ret = %i\n", ret);
-         printf("Error Reading.\n");
-      }
-
-      PROCESS_WAIT_UNTIL(etimer_expired(&periodic));
-   }
-
-   PROCESS_END();
 }
