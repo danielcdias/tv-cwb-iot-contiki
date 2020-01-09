@@ -19,15 +19,13 @@
 #include "ti-lib.h"
 #include "ioc.h"
 
-#include "sensors-helper.h"
-
 /******************************************************************************
  * Definitions of constants for port used and internal commands
  ******************************************************************************/
 #define DS18B20_COMMAND_READ_SCRATCH_PAD 0xBE
 #define DS18B20_COMMAND_START_CONVERSION 0x44
 #define DS18B20_COMMAND_SKIP_ROM 0xCC
-#define DS18B20_PORT TEMPERATURE_SENSOR
+#define DS18B20_PORT IOID_22
 
 /******************************************************************************
  * Functions definitions

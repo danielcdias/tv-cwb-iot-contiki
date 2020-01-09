@@ -6,13 +6,22 @@
  * Main C file for the Terraço Verde CWB project. Implements a set of sensor to collect
  * data regarding the influence of green terraces in rain absorption.
  *
- * Each CC2650 board will control a set of 5 rain sensors, 1 capacitive soil moisture
- * sensor and 1 temperature sensor. A pluviometer sensor may also be connected.
+ * Each CC2650 board will control 1 optical rain sensor or a pluviometer, 1
+ * capacitive rain sensor on drain, 1 capacitive soil moisture sensor and 1
+ * temperature sensor.
  */
 
 /******************************************************************************
  * Constants and includes
  ******************************************************************************/
+
+#include <stdio.h>
+#include <string.h>
+#include <inttypes.h>
+#include <errno.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
 
 #include "contiki.h"
 #include "contiki-lib.h"
@@ -32,22 +41,15 @@
 #include "ti-lib.h"
 #include "dev/leds.h"
 
-#define FIRMWARE_VERSION "01.01.00"
+#define FIRMWARE_VERSION "01.02.00"
 
 #define DEBUG 1
 
 #include "net/ip/uip-debug.h"
 
 #include "sensors-helper.h"
-#include "pluv-interruption.h"
-
-#include <stdio.h>
-#include <string.h>
-#include <inttypes.h>
-#include <errno.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <stdlib.h>
+#include "temp-sensor-helper.h"
+#include "interruption-sensor.h"
 
 #define MDNS 1
 
@@ -62,8 +64,8 @@
 #define TOPIC_STA_GENERAL "/tvcwb1299/mmm/sta/%02X%02X"
 #define TOPIC_CMD "/tvcwb1299/mmm/cmd/%02X%02X"
 
-#define RAIN_SENSORS_STATUS_ARRAY_PLV "RSS%u%u%u%u%uPLV%uPC%u"
-#define RAIN_SENSORS_STATUS_ARRAY "RSS%u%u%u%u%uPC%u"
+#define RAIN_SENSORS_STATUS_ARRAY_PLV "P%uP%u"
+#define RAIN_SENSORS_STATUS_ARRAY_SOC "O%uP%u"
 
 #define FIRMWARE_VERSION_STATUS_ARRAY "FWV%s"
 
@@ -88,16 +90,13 @@
 
 #define TOPIC_CONTROL 0
 #define TOPIC_STATUS_GENERAL 1
-#define TOPIC_RAIN_SENSOR_SURFACE_1 2
-#define TOPIC_RAIN_SENSOR_SURFACE_2 3
-#define TOPIC_RAIN_SENSOR_SURFACE_3 4
-#define TOPIC_RAIN_SENSOR_SURFACE_4 5
-#define TOPIC_RAIN_SENSOR_DRAIN 6
-#define TOPIC_CAPACITIVE_SOIL_MOISTURE_SENSOR 7
-#define TOPIC_TEMPERATURE_SENSOR 8
-#define TOPIC_PLUVIOMETER 9
+#define TOPIC_OPTICAL_RAIN_SENSOR 2
+#define TOPIC_RAIN_SENSOR_DRAIN 3
+#define TOPIC_CAPACITIVE_SOIL_MOISTURE_SENSOR 4
+#define TOPIC_TEMPERATURE_SENSOR 5
+#define TOPIC_PLUVIOMETER 6
 
-#define TOTAL_TOPICS 10
+#define TOTAL_TOPICS 7
 
 #define BOARD_STATUS_STARTED "STT"
 #define BOARD_STATUS_TIMESTAMP_UPDATE_REQUEST "TUR"
@@ -105,6 +104,16 @@
 #define TIMESTAMP_UPDATE_REQUEST_INTERVAL 86400 // 1 day in seconds
 
 #define PUBLISH_MESSAGES_DELAY 0.2
+
+// Indicates if board is running in development environment
+#define DEV_ENVIRONMENT_JUMPER IOID_1
+
+// Possible valued for dev environment jumper
+#define DEV_ENVIRONMENT 1
+#define PROD_ENVIRONMENT 0
+
+// Interval to report board general status
+#define REPORT_BOARD_GENERAL_STATUS_INTERVAL 2980 // 298 seconds
 
 /******************************************************************************
  * Global variables and structs definitions
@@ -117,10 +126,7 @@
  * Positions inside array:
  * 0 - control topic (TOPIC_CONTROL)
  * 1 - general status topic (TOPIC_STATUS_GENERAL)
- * 2 - rain sensor for surface 1 topic (TOPIC_RAIN_SENSOR_SURFACE_1)
- * 3 - rain sensor for surface 2 topic (TOPIC_RAIN_SENSOR_SURFACE_2)
- * 4 - rain sensor for surface 3 topic (TOPIC_RAIN_SENSOR_SURFACE_3)
- * 5 - rain sensor for surface 4 topic (TOPIC_RAIN_SENSOR_SURFACE_4)
+ * 2 - optical rain sensor topic (TOPIC_OPTICAL_RAIN_SENSOR)
  * 6 - rain sensor for drain topic (TOPIC_RAIN_SENSOR_DRAIN)
  * 7 - capacitive soil moisture sensor topic (TOPIC_CAPACITIVE_SOIL_MOISTURE_SENSOR)
  * 8 - temperature sensor (TOPIC_TEMPERATURE_SENSOR)
@@ -151,10 +157,8 @@ static bool is_rebooting = false;
 static bool are_sta_topics_registered = false;
 static bool is_cmd_topic_registered = false;
 static bool is_connected = false;
-static bool is_raining = false;
-static bool peak_delay_reported = false;
 
-static uint16_t pluviometer_counter = 0;
+static uint16_t interruption_counter = 0;
 
 static uint32_t base_timestamp_from_server = 0;
 static uint32_t base_clock_seconds = 0;
@@ -168,7 +172,7 @@ static struct ctimer connection_timer;
 static process_event_t connection_timeout_event;
 
 static process_event_t mqttsn_connack_event, network_inactivity_timeout_reset,
-         pluviometer_tic_event;
+         interruption_sensor_tic_event;
 
 static uint8_t processes_running = 0;
 
@@ -188,11 +192,13 @@ PROCESS(reboot_process, "Reboots the board");
 PROCESS(green_led_process, "Controls green led indicator");
 PROCESS(red_led_process, "Controls ref led indicator");
 PROCESS(request_timestamp_update, "Send command requesting timestamp update");
-PROCESS(pluviometer_reset_interval_process, "Resets pluviometer when time interval is reached");
+PROCESS(interruption_sensor_reset_interval_process, "Resets interruption sensor counter when time interval is reached");
 
-PROCESS(rain_sensors_process, "Reads from all rain sensors");
+PROCESS(rain_sensor_drain_process, "Reads rain sensor on drain");
 PROCESS(moisture_sensor_process, "Reads from capacitive soil moisture and temperature sensors");
-PROCESS(pluviometer_sensor_process, "Receives events from pluviometer sensor");
+PROCESS(interruption_sensor_process, "Receives events from interruption sensor");
+
+PROCESS(report_board_general_status, "Reports board general status");
 
 AUTOSTART_PROCESSES(&mqttsn_process);
 
@@ -228,11 +234,8 @@ void set_red_led(uint8_t value) {
 static void init_sensor_topics_array() {
    strcpy(pub_sensors_topic[TOPIC_CONTROL].sensor_id, "\0");
    strcpy(pub_sensors_topic[TOPIC_STATUS_GENERAL].sensor_id, "\0");
-   strcpy(pub_sensors_topic[TOPIC_RAIN_SENSOR_SURFACE_1].sensor_id, SENSOR_RAIN_SURFACE_1);
-   strcpy(pub_sensors_topic[TOPIC_RAIN_SENSOR_SURFACE_2].sensor_id, SENSOR_RAIN_SURFACE_2);
-   strcpy(pub_sensors_topic[TOPIC_RAIN_SENSOR_SURFACE_3].sensor_id, SENSOR_RAIN_SURFACE_3);
-   strcpy(pub_sensors_topic[TOPIC_RAIN_SENSOR_SURFACE_4].sensor_id, SENSOR_RAIN_SURFACE_4);
-   strcpy(pub_sensors_topic[TOPIC_RAIN_SENSOR_DRAIN].sensor_id, SENSOR_RAIN_DRAIN_1);
+   strcpy(pub_sensors_topic[TOPIC_OPTICAL_RAIN_SENSOR].sensor_id, SENSOR_OPTICAL_RAIN);
+   strcpy(pub_sensors_topic[TOPIC_RAIN_SENSOR_DRAIN].sensor_id, SENSOR_RAIN_DRAIN);
    strcpy(pub_sensors_topic[TOPIC_CAPACITIVE_SOIL_MOISTURE_SENSOR].sensor_id, SENSOR_CAPACITIVE_SOIL_MOISTURE);
    strcpy(pub_sensors_topic[TOPIC_TEMPERATURE_SENSOR].sensor_id, SENSOR_TEMPERATURE);
    strcpy(pub_sensors_topic[TOPIC_PLUVIOMETER].sensor_id, SENSOR_PLUVIOMETER);
@@ -511,7 +514,7 @@ PROCESS_THREAD(ctrl_subscription_process, ev, data) {
       PRINTF("Subscribing... topic: %s\n", pub_sensors_topic[TOPIC_CONTROL].topic);
       pub_sensors_topic[TOPIC_CONTROL].message_id = mqtt_sn_subscribe_try(sreq,
          &mqtt_sn_c, pub_sensors_topic[TOPIC_CONTROL].topic, 0, REPLY_TIMEOUT);
-      etimer_set(&periodic_timer, 1*CLOCK_SECOND);
+      etimer_set(&periodic_timer, 1 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT();
       if (mqtt_sn_request_success(sreq)) {
           subscription_tries = REQUEST_RETRIES;
@@ -550,7 +553,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
    process_start(&green_led_process, NULL);
    process_start(&red_led_process, NULL);
 
-   etimer_set(&et, CLOCK_SECOND * 1);
+   etimer_set(&et, 1 * CLOCK_SECOND);
    PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
 
    sprintf(contiki_hostname, "node%02X%02X", linkaddr_node_addr.u8[6], linkaddr_node_addr.u8[7]);
@@ -564,12 +567,12 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
 
    set_red_led(RED_LED_CONNECTING);
 
-   etimer_set(&periodic_timer, 2*CLOCK_SECOND);
+   etimer_set(&periodic_timer, 2 * CLOCK_SECOND);
    while ((!is_rebooting) && (uip_ds6_get_global(ADDR_PREFERRED) == NULL)) {
       PROCESS_WAIT_EVENT();
       if(etimer_expired(&periodic_timer)) {
          PRINTF("Waiting for IP auto configuration...\n");
-         etimer_set(&periodic_timer, 2*CLOCK_SECOND);
+         etimer_set(&periodic_timer, 2 * CLOCK_SECOND);
       }
    }
 
@@ -591,7 +594,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
          PROCESS_WAIT_EVENT();
       } else if(status != RESOLV_STATUS_CACHED) {
          PRINTF("Can't get connection address.\n");
-         etimer_set(&periodic_timer, 2*CLOCK_SECOND);
+         etimer_set(&periodic_timer, 2 * CLOCK_SECOND);
          PROCESS_WAIT_EVENT();
          connection_retries++;
          if (connection_retries >= 15) {
@@ -667,17 +670,20 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
             }
             if (!is_rebooting) {
                publish_firmware_version();
+               configureGPIOSensors();
+               process_start(&report_board_general_status, NULL);
                process_start(&request_timestamp_update, NULL);
-               process_start(&rain_sensors_process, NULL);
+               process_start(&rain_sensor_drain_process, NULL);
                process_start(&moisture_sensor_process, NULL);
                is_pluviometer_installed = (readGPIOSensor(JUMPER_PLUVIOMETER_INSTALLED) == PLUVIOMETER_INSTALLED);
                if (is_pluviometer_installed)  {
-                  process_start(&pluviometer_sensor_process, NULL);
-                  process_start(&pluviometer_reset_interval_process, NULL);
+                  PRINTF("### Pluviometer is installed in this control board.\n");
                } else {
-                  PRINTF("### Pluviometer is not installed in this control board.\n");
+                  PRINTF("### Optioncal rain sensor is installed in this control board.\n");
                }
-               etimer_set(&et, 2*CLOCK_SECOND);
+               process_start(&interruption_sensor_process, NULL);
+               process_start(&interruption_sensor_reset_interval_process, NULL);
+               etimer_set(&et, 2 * CLOCK_SECOND);
                while(!is_rebooting) {
                   PROCESS_WAIT_EVENT();
                   if(etimer_expired(&et)) {
@@ -749,10 +755,10 @@ PROCESS_THREAD(reboot_process, ev, data) {
    static uint8_t i;
    for (i = 0; i < 7; i++) {
       leds_toggle(LEDS_ALL);
-      etimer_set(&et, CLOCK_SECOND * 0.8);
+      etimer_set(&et, 0.8 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
       leds_toggle(LEDS_ALL);
-      etimer_set(&et, CLOCK_SECOND * 0.5);
+      etimer_set(&et, 0.5 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
    }
    loop_forever();
@@ -783,7 +789,7 @@ PROCESS_THREAD(green_led_process, ev, data) {
          leds_off(LEDS_GREEN);
          break;
       }
-      etimer_set(&et, CLOCK_SECOND * 0.1);
+      etimer_set(&et, 0.1 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
    }
    PRINTF("<<<--- Ending process thread 'green_led_process'\n");
@@ -811,7 +817,7 @@ PROCESS_THREAD(red_led_process, ev, data) {
          leds_off(LEDS_RED);
          break;
       }
-      etimer_set(&et, CLOCK_SECOND * 0.6);
+      etimer_set(&et, 0.6 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
    }
    PRINTF("<<<--- Ending process thread 'red_led_process'\n");
@@ -822,110 +828,46 @@ PROCESS_THREAD(red_led_process, ev, data) {
 /********************************** SENSORS ***********************************/
 
 /**
- * Controls the reading status of all reain sensors.
+ * Controls the reading status of rain sensor of drain
  */
-PROCESS_THREAD(rain_sensors_process, ev, data) {
+PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'rain_sensors_process'\n");
+   PRINTF("--->>> Starting process thread 'rain_sensor_drain_process'\n");
    processes_running++;
    static struct etimer et;
 
-   configureGPIOSensors();
+   static bool water_detected = false, reported_last_rain = false, report_water_on_drain = false;
+   static uint32_t counter = 0;
 
-   static uint16_t rsa_interval_counter = 0;
-   static int previousValueRead[] = {1, 1, 1, 1, 1}; // Starts with 1, that's the value for no short circuit in rain sensor.
-   static int lastReadClock[] = {0, 0, 0, 0, 0};
-   static int rainSensorState[] = {RAIN_SENSOR_NOT_RAINING, RAIN_SENSOR_NOT_RAINING, RAIN_SENSOR_NOT_RAINING, RAIN_SENSOR_NOT_RAINING, RAIN_SENSOR_NOT_RAINING};
+   while (true) {
 
-   static uint8_t i;
-
-   while ((!is_rebooting) && (is_connected)) {
-
-      static int valueRead[5];
-
-      valueRead[0] = readGPIOSensor(RAIN_SENSOR_SURFACE_1);
-      valueRead[1] = readGPIOSensor(RAIN_SENSOR_SURFACE_2);
-      valueRead[2] = readGPIOSensor(RAIN_SENSOR_SURFACE_3);
-      valueRead[3] = readGPIOSensor(RAIN_SENSOR_SURFACE_4);
-      valueRead[4] = readGPIOSensor(RAIN_SENSOR_DRAIN);
-
-      for (i = 0; i < 5; i++) {
-         if (previousValueRead[i] != valueRead[i]) {
-            rainSensorState[i] = RAIN_SENSOR_RAINING;
-            lastReadClock[i] = clock_seconds();
-         } else {
-            if ((clock_seconds() - lastReadClock[i]) >= RAIN_SENSOR_TIMEOUT_RAIN) {
-               rainSensorState[i] = RAIN_SENSOR_NOT_RAINING;
+      uint32_t value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
+      water_detected = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
+      if (water_detected) {
+         if ((interruption_counter > 0) && (!reported_last_rain)) {
+            reported_last_rain = true;
+            report_water_on_drain = true;
+         } else if (interruption_counter == 0) {
+            reported_last_rain = false;
+            if (counter > (MIN_INTERVAL_REPORT_WATER_ON_DRAIN / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
+               report_water_on_drain = true;
             }
          }
-         previousValueRead[i] = valueRead[i];
-      }
-
-      if ((!is_raining) && ((rainSensorState[0] + rainSensorState[1] + rainSensorState[2] + rainSensorState[3]) >= RAIN_MIN_SENSORS_DETECT_RAIN)) {
-         is_raining = true;
-         PRINTF("##### Rain started!\n");
-         if (rainSensorState[0] == RAIN_SENSOR_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_1, RAIN_SENSOR_RAINING);
-         }
-         if (rainSensorState[1] == RAIN_SENSOR_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_2, RAIN_SENSOR_RAINING);
-         }
-         if (rainSensorState[2] == RAIN_SENSOR_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_3, RAIN_SENSOR_RAINING);
-         }
-         if (rainSensorState[3] == RAIN_SENSOR_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_4, RAIN_SENSOR_RAINING);
+         if (report_water_on_drain) {
+            printf("##### Rain Sensor on Drain - Water detected!\n");
+            report_water_on_drain = false;
+            publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, WATER_ON_DRAIN);
+            counter = 0;
          }
       }
 
-      if ((is_raining) && (!peak_delay_reported) && (rainSensorState[4] == RAIN_SENSOR_RAINING)) {
-         PRINTF("##### Drain reached!\n");
-         peak_delay_reported = true;
-         publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, RAIN_SENSOR_RAINING);
-      }
-
-      // Raining and, at least, 3 rain sensors reporting not raining (1 = not raining)
-      if ((is_raining) && ((rainSensorState[0] + rainSensorState[1] + rainSensorState[2] + rainSensorState[3]) < RAIN_MIN_SENSORS_DETECT_RAIN)) {
-         PRINTF("##### Rain ended.\n");
-         is_raining = false;
-         if (rainSensorState[0] == RAIN_SENSOR_NOT_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_1, RAIN_SENSOR_NOT_RAINING);
-         }
-         if (rainSensorState[1] == RAIN_SENSOR_NOT_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_2, RAIN_SENSOR_NOT_RAINING);
-         }
-         if (rainSensorState[2] == RAIN_SENSOR_NOT_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_3, RAIN_SENSOR_NOT_RAINING);
-         }
-         if (rainSensorState[3] == RAIN_SENSOR_NOT_RAINING) {
-            publish_sensor_status(TOPIC_RAIN_SENSOR_SURFACE_4, RAIN_SENSOR_NOT_RAINING);
-         }
-         peak_delay_reported = false;
-      }
-
-      etimer_set(&et, RAIN_SENSORS_READ_INTERVAL * CLOCK_SECOND);
+      etimer_set(&et, READING_INTERVAL_RAIN_ON_DRAIN_SENSOR * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et);
-
-      rsa_interval_counter++;
-      if (rsa_interval_counter >= REPORT_RAIN_SENSORS_ARRAY_INTERVAL) {
-         rsa_interval_counter = 0;
-         char rsa_values[20] = "\0";
-         if (is_pluviometer_installed) {
-            sprintf(rsa_values, RAIN_SENSORS_STATUS_ARRAY_PLV,
-                     rainSensorState[0], rainSensorState[1], rainSensorState[2], rainSensorState[3], rainSensorState[4],
-                     pluviometer_counter, processes_running);
-         } else {
-            sprintf(rsa_values, RAIN_SENSORS_STATUS_ARRAY,
-                     rainSensorState[0], rainSensorState[1], rainSensorState[2], rainSensorState[3], rainSensorState[4],
-                     processes_running);
-         }
-         publish_board_status(rsa_values);
-      }
-
+      counter++;
    }
 
-   PRINTF("<<<--- Ending process thread 'rain_sensors_process'\n");
+   PRINTF("<<<--- Ending process thread 'rain_sensor_drain_process'\n");
    processes_running--;
    PROCESS_END();
 }
@@ -944,10 +886,9 @@ PROCESS_THREAD(moisture_sensor_process, ev, data) {
    static uint32_t counter = 0;
 
    while ((!is_rebooting) && (is_connected)) {
-      uint32_t interval_diff = (is_raining ? MOISTURE_SENSOR_READ_INTERVAL_RAIN : MOISTURE_SENSOR_READ_INTERVAL_NO_RAIN);
-      if (counter >= interval_diff) {
+      if (counter >= MOISTURE_TEMP_READ_INTERVAL) {
          counter = 0;
-         uint32_t moistureSensorRead = readADSMoistureSensor();
+         uint32_t moistureSensorRead = readADSSensor(MOISTURE_SENSOR);
          int temperatureSensorRead = readTemperatureSensor();
          if ((first_temp_reading) && (temperatureSensorRead == 8500)) {
             first_temp_reading = false;
@@ -968,58 +909,69 @@ PROCESS_THREAD(moisture_sensor_process, ev, data) {
 }
 
 /**
- * Controls the reading status of the pluviometer sensor.
+ * Controls the reading status of the interruption sensor (pluviometer or optical rain sensor).
  */
-PROCESS_THREAD(pluviometer_sensor_process, ev, data) {
+PROCESS_THREAD(interruption_sensor_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'pluviometer_sensor_process'\n");
+   PRINTF("--->>> Starting process thread 'interruption_sensor_process'\n");
    processes_running++;
 
-   SENSORS_ACTIVATE(pluviometer_sensor);
+   SENSORS_ACTIVATE(interruption_sensor);
 
    while ((!is_rebooting) && (is_connected)) {
       PROCESS_YIELD();
       if(ev == sensors_event) {
-          if(data == &pluviometer_sensor) {
-             printf("##### Pluviometer Sensor event received!\n");
-             pluviometer_counter++;
-             publish_sensor_status(TOPIC_PLUVIOMETER, pluviometer_counter);
-             process_post(&pluviometer_reset_interval_process, pluviometer_tic_event, NULL);
+          if(data == &interruption_sensor) {
+             interruption_counter++;
+             if (is_pluviometer_installed) {
+                printf("##### Pluviometric Sensor event received!\n");
+                publish_sensor_status(TOPIC_PLUVIOMETER, interruption_counter);
+             } else {
+                printf("##### Optical Rain Sensor event received!\n");
+                publish_sensor_status(TOPIC_OPTICAL_RAIN_SENSOR, interruption_counter);
+             }
+             process_post(&interruption_sensor_reset_interval_process, interruption_sensor_tic_event, NULL);
           }
       }
    }
 
-   SENSORS_DEACTIVATE(pluviometer_sensor);
-   PRINTF("<<<--- Ending process thread 'pluviometer_sensor_process'\n");
+   SENSORS_DEACTIVATE(interruption_sensor);
+   PRINTF("<<<--- Ending process thread 'interruption_sensor_process'\n");
    processes_running--;
    PROCESS_END();
 }
 
 /**
- * Resets pluviometer counter when time is reached
+ * Resets interruption sensor counter when time is reached
  */
-PROCESS_THREAD(pluviometer_reset_interval_process, ev, data) {
+PROCESS_THREAD(interruption_sensor_reset_interval_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'pluviometer_reset_interval_process'\n");
+   PRINTF("--->>> Starting process thread 'interruption_sensor_reset_interval_process'\n");
    processes_running++;
    static struct etimer et;
    static uint32_t counter = 0;
-   pluviometer_tic_event = process_alloc_event();
+   interruption_sensor_tic_event = process_alloc_event();
 
    etimer_set(&et, CLOCK_SECOND);
    while ((!is_rebooting) && (is_connected)) {
       counter++;
       PROCESS_WAIT_EVENT();
-      if (ev == pluviometer_tic_event) {
+      if (ev == interruption_sensor_tic_event) {
          counter = 0;
       }
       if (ev == PROCESS_EVENT_TIMER) {
-         if (counter >= PLUVIOMETER_WAIT_INTERVAL_TO_RESET) {
-            if (pluviometer_counter > 0) {
-               pluviometer_counter = 0;
-               publish_sensor_status(TOPIC_PLUVIOMETER, pluviometer_counter);
+         if (counter >= INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET) {
+            if (interruption_counter > 0) {
+               interruption_counter = 0;
+               if (is_pluviometer_installed) {
+                  PRINTF("##### Pluviometric Sensor - value reset.\n");
+                  publish_sensor_status(TOPIC_PLUVIOMETER, interruption_counter);
+               } else {
+                  PRINTF("##### Optical Rain Sensor - value reset.\n");
+                  publish_sensor_status(TOPIC_OPTICAL_RAIN_SENSOR, interruption_counter);
+               }
             }
             counter = 0;
          }
@@ -1027,7 +979,7 @@ PROCESS_THREAD(pluviometer_reset_interval_process, ev, data) {
       etimer_restart(&et);
    }
 
-   PRINTF("<<<--- Ending process thread 'pluviometer_reset_interval_process'\n");
+   PRINTF("<<<--- Ending process thread 'interruption_sensor_reset_interval_process'\n");
    processes_running--;
    PROCESS_END();
 }
@@ -1054,6 +1006,35 @@ PROCESS_THREAD(request_timestamp_update, ev, data) {
    }
 
    PRINTF("<<<--- Ending process thread 'request_timestamp_update'\n");
+   processes_running--;
+   PROCESS_END();
+}
+
+PROCESS_THREAD(report_board_general_status, ev, data) {
+   PROCESS_BEGIN();
+
+   PRINTF("--->>> Starting process thread 'report_board_general_status'\n");
+   processes_running++;
+   static struct etimer et;
+   static uint32_t counter = 0;
+
+   while ((!is_rebooting) && (is_connected)) {
+      etimer_set(&et, CLOCK_SECOND);
+      PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+      counter++;
+      if (counter >= REPORT_BOARD_GENERAL_STATUS_INTERVAL) {
+         counter = 0;
+         char rsa_values[10] = "\0";
+         if (is_pluviometer_installed) {
+            sprintf(rsa_values, RAIN_SENSORS_STATUS_ARRAY_PLV, interruption_counter, processes_running);
+         } else {
+            sprintf(rsa_values, RAIN_SENSORS_STATUS_ARRAY_SOC, interruption_counter, processes_running);
+         }
+         publish_board_status(rsa_values);
+      }
+   }
+
+   PRINTF("<<<--- Ending process thread 'report_board_general_status'\n");
    processes_running--;
    PROCESS_END();
 }

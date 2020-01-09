@@ -50,7 +50,7 @@ RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 // Moisture sensor port (ADC)
 #define MOISTURE_SENSOR ADC_COMPB_IN_AUXIO6 // DIO 24
 
-// Moisture sensor port (ADC)
+// Rain sensor or drain port (ADC)
 #define RAIN_ON_DRAIN_SENSOR ADC_COMPB_IN_AUXIO7 // DIO 23
 
 // Temperature sensor port (GPIO)
@@ -59,18 +59,29 @@ RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 // Pluviometer installed jumper indicator port (GPIO)
 #define JUMPER_PLUVIOMETER_INSTALLED IOID_0
 
-// Pluviometer wait interval to reset
-#define PLUVIOMETER_WAIT_INTERVAL_TO_RESET 900 // seconds
+// Interruption sensor wait interval to reset
+// Pluviometer or Optiocal Rain Sensor
+#define INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET 40 // 900 seconds
 
 // Reading interval for rain on drain sensor
 #define RAIN_ON_DRAIN_READ_INTERVAL 0.1 // seconds
 
 // Max value read to detect rain. Any value below that indicates rain
 // TODO Checar se este valor é correto para qualquer sensor!
-#define RAIN_ON_DRAIN_DETECTION_MAX_VALUE 900000
+#define RAIN_ON_DRAIN_DETECTION_MAX_VALUE 1000000
+
+// Minimum interval to report water detected again for rain on drain
+#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN 30 // seconds
+
+// Reading interval for rain on drain sensor
+#define READING_INTERVAL_RAIN_ON_DRAIN_SENSOR 0.5 // seconds
+
+// Rain on drain sensor possible values
+#define NO_WATER_ON_DRAIN 0
+#define WATER_ON_DRAIN 1
 
 // Reading interval for moisture and temperature sensors
-#define MOISTURE_TEMP_READ_INTERVAL 30 // seconds
+#define MOISTURE_TEMP_READ_INTERVAL 30 // 3600 seconds
 
 // Capacitive sensor reading definitions
 #define MIN_VALUE_ACCEPTED_ADS 400000
@@ -79,16 +90,6 @@ RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 
 // Temperature sensor reading definitions
 #define MAX_READING_ATTEMPTS_TMP 5
-
-// Rain sensor possible values
-#define RAIN_SENSOR_NOT_RAINING 0
-#define RAIN_SENSOR_RAINING 1
-
-// Timeout after optical rain sensor stop to detect drops to indicate and of rain
-#define LAST_RAIN_DROP_TIMEOUT 300 // 300 seconds
-
-// Minimum number of drops to notify rain started
-#define MIN_DROPS_TO_START_RAIN 2 // 2 drops
 
 // Possible valued for pluviometer installed jumper indicator
 #define PLUVIOMETER_INSTALLED 1

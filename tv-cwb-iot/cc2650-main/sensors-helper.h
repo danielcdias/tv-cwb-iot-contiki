@@ -5,20 +5,23 @@
  *
  * Defines interface to configure and read from all sensors used by the CC2650 board.
  *
- * All 5 rain sensors and the temperature sensor will use a GPIO port and the
- * reading will be performed by pooling.
+ * The temperature sensor will use a GPIO port and the reading will be performed by
+ * pooling.
  *
- * The moisture sensor will be used as ADC sensor.
+ * The moisture sensor and the rain on drain sensor will be used as ADC sensors.
  *
- * The pluviometer will use a interruption event, just like a button's
- * implementation for the CC2650 board.
- * The presence of this sensor will be defined by a jumper. When ON, indicates
- * the pluviometer is installed.
+ * The pluviometer and the rain optical sensor will use a interruption event, just
+ * like a button's implementation for the CC2650 board.
+ * The presence which sensor (pluviometer or rain optioncal) will be defined by a
+ * jumper. When ON, indicates the pluviometer is installed, otherwise, the rain
+ * optical sensor is installed.
  */
 
 #include "board.h"
 #include "dev/adc-sensor.h"
 #include "lib/sensors.h"
+#include "interruption-sensor.h"
+#include "temp-sensor-helper.h"
 
 #ifndef SENSORS_HELP_H_
 #define SENSORS_HELP_H_
@@ -30,47 +33,55 @@
 Constant for ports are:
 
 > Digital IO ports:
-RAIN_SENSOR_           Rain Sensor
-  RAIN_SENSOR_SURFACE_ Rain Sensor placed in model surface
-  RAIN_SENSOR_DRAIN    Rain Sensor placed in model drain
-PLUVIOMETER_SENSOR     Pluviometer
+
+OPTICAL_RAIN_SENSOR    Optical Rain Sensor
+PLUVIOMETER_SENSOR     Pluviometric Sensor
+TEMPERATURE_SENSOR     Temperature Sensor
 
 > ADC ports:
-MOISTURE_SENSOR        Soil Moisture Sensor
-TEMPERATURE_SENSOR     Temperature Sensor
+MOISTURE_SENSOR        Capacitive Soil Moisture Sensor
+RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 
 */
 
-// Surface rain sensors ports (GPIO)
-#define RAIN_SENSOR_SURFACE_1 IOID_25
-#define RAIN_SENSOR_SURFACE_2 IOID_26
-#define RAIN_SENSOR_SURFACE_3 IOID_27
-#define RAIN_SENSOR_SURFACE_4 IOID_28
-
-// Drain rain sensors ports  (GPIO)
-#define RAIN_SENSOR_DRAIN IOID_29
-
-// Pluviometer port (GPIO)
-#define PLUVIOMETER_SENSOR IOID_23
+// Pluviometer or Rain Optical Sensor port (GPIO)
+#define PLV_SOC_SENSOR INTERRUPTION_SENSOR_PORT
 
 // Moisture sensor port (ADC)
-#define MOISTURE_SENSOR ADC_COMPB_IN_AUXIO0 // DIO 30
+#define MOISTURE_SENSOR ADC_COMPB_IN_AUXIO6 // DIO 24
+
+// Rain sensor or drain port (ADC)
+#define RAIN_ON_DRAIN_SENSOR ADC_COMPB_IN_AUXIO7 // DIO 23
 
 // Temperature sensor port (GPIO)
-#define TEMPERATURE_SENSOR IOID_24
+#define TEMPERATURE_SENSOR DS18B20_PORT
 
 // Pluviometer installed jumper indicator port (GPIO)
-#define JUMPER_PLUVIOMETER_INSTALLED IOID_21
+#define JUMPER_PLUVIOMETER_INSTALLED IOID_0
 
-// Pluviometer wait interval to reset
-#define PLUVIOMETER_WAIT_INTERVAL_TO_RESET 900 // seconds
+// Interruption sensor wait interval to reset
+// Pluviometer or Optiocal Rain Sensor
+#define INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET 40 // 900 seconds
 
-// Reading interval for rain sensors
-#define RAIN_SENSORS_READ_INTERVAL 0.1 // seconds
+// Reading interval for rain on drain sensor
+#define RAIN_ON_DRAIN_READ_INTERVAL 0.1 // seconds
 
-// Reading intervals for moisture sensor
-#define MOISTURE_SENSOR_READ_INTERVAL_NO_RAIN 3600 // seconds
-#define MOISTURE_SENSOR_READ_INTERVAL_RAIN 300 // seconds
+// Max value read to detect rain. Any value below that indicates rain
+// TODO Checar se este valor é correto para qualquer sensor!
+#define RAIN_ON_DRAIN_DETECTION_MAX_VALUE 1000000
+
+// Minimum interval to report water detected again for rain on drain
+#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN 30 // seconds
+
+// Reading interval for rain on drain sensor
+#define READING_INTERVAL_RAIN_ON_DRAIN_SENSOR 0.5 // seconds
+
+// Rain on drain sensor possible values
+#define NO_WATER_ON_DRAIN 0
+#define WATER_ON_DRAIN 1
+
+// Reading interval for moisture and temperature sensors
+#define MOISTURE_TEMP_READ_INTERVAL 30 // 3600 seconds
 
 // Capacitive sensor reading definitions
 #define MIN_VALUE_ACCEPTED_ADS 400000
@@ -80,38 +91,17 @@ TEMPERATURE_SENSOR     Temperature Sensor
 // Temperature sensor reading definitions
 #define MAX_READING_ATTEMPTS_TMP 5
 
-// Interval to report rain sensor array information
-#define REPORT_RAIN_SENSORS_ARRAY_INTERVAL 2980 // 298 seconds
-
-// Rain sensor possible values
-#define RAIN_SENSOR_NOT_RAINING 0
-#define RAIN_SENSOR_RAINING 1
-
-// Timeout after sensor stop to alternate values to assume rain stopped
-#define RAIN_SENSOR_TIMEOUT_RAIN 300 // 300 seconds
-
-// Minimum number of sensores to detect rain started/ended
-#define RAIN_MIN_SENSORS_DETECT_RAIN 2
-
 // Possible valued for pluviometer installed jumper indicator
 #define PLUVIOMETER_INSTALLED 1
 #define PLUVIOMETER_NOT_INSTALLED 0
 
-// Indicates if board is running in development environment
-#define DEV_ENVIRONMENT_JUMPER IOID_22
-
-// Possible valued for dev environment jumper
-#define DEV_ENVIRONMENT 1
-#define PROD_ENVIRONMENT 0
-
 /******************************** Sensor IDs **********************************/
 
-/* Rain Sensors */
-#define SENSOR_RAIN_SURFACE_1 "CS1"
-#define SENSOR_RAIN_SURFACE_2 "CS2"
-#define SENSOR_RAIN_SURFACE_3 "CS3"
-#define SENSOR_RAIN_SURFACE_4 "CS4"
-#define SENSOR_RAIN_DRAIN_1 "CRL"
+/* Rain on Drain Sensor */
+#define SENSOR_RAIN_DRAIN "SCR"
+
+/* Optical Rain Sensor */
+#define SENSOR_OPTICAL_RAIN "SOC"
 
 /* Capacitive soil moisture sensor */
 #define SENSOR_CAPACITIVE_SOIL_MOISTURE "SCU"
@@ -127,7 +117,7 @@ TEMPERATURE_SENSOR     Temperature Sensor
  ******************************************************************************/
 void configureGPIOSensors();
 
-uint32_t readADSMoistureSensor();
+uint32_t readADSSensor(uint32_t port);
 
 int readTemperatureSensor();
 

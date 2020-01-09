@@ -41,7 +41,7 @@ static struct sensors_sensor *sensorMoisture;
 static struct timer reading_timer_ADS, reading_timer_tmp;
 
 /**
- * util.h header functions implementation
+ * sensors-helper.h header functions implementation
  */
 void configureGPIOSensors() {
   IOCPinTypeGpioInput(JUMPER_PLUVIOMETER_INSTALLED);

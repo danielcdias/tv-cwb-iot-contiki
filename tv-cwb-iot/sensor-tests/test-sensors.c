@@ -34,13 +34,13 @@ PROCESS(testRainOpticalSensor, "testRainOpticalSensor");
 PROCESS(testPluviometerSensor, "testPluviometerSensor");
 PROCESS(testMoistureSensor, "testMoistureSensor");
 PROCESS(testTemperatureSensor, "testTemperatureSensor");
-//AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor, &testRainOpticSensor, &testPluviometerSensor, &testMoistureSensor, &testTemperatureSensor);
+AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor, &testRainOpticalSensor, &testPluviometerSensor, &testMoistureSensor, &testTemperatureSensor);
 //AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor);
 //AUTOSTART_PROCESSES(&testPluviometerSensor);
 //AUTOSTART_PROCESSES(&testRainOpticalSensor);
 //AUTOSTART_PROCESSES(&testMoistureSensor);
 //AUTOSTART_PROCESSES(&testTemperatureSensor);
-AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor, &testRainOpticalSensor, &testTemperatureSensor);
+//AUTOSTART_PROCESSES(&testRainCapacitiveDrainSensor, &testRainOpticalSensor, &testTemperatureSensor);
 
 /**************************
  * Processes implementation
@@ -60,12 +60,13 @@ PROCESS_THREAD(testRainCapacitiveDrainSensor, ev, data) {
 
       uint32_t value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
       is_raining = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
+      // printf("Value read = %lu\n", value_read);
       if (previous ^ is_raining) {
          previous = is_raining;
          printf((is_raining ? "# %s # Water on drain DETECTED!\n" : "# %s # Water on drain detection STOPPED!\n"), SENSOR_RAIN_DRAIN);
       }
 
-      etimer_set(&et_rainCapacitiveDrainSensor, 0.1 * CLOCK_SECOND);
+      etimer_set(&et_rainCapacitiveDrainSensor, 1 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER && data == &et_rainCapacitiveDrainSensor);
    }
 
@@ -113,7 +114,7 @@ PROCESS_THREAD(testPluviometerSensor, ev, data) {
        printf("# %s # ---------- Pluviometric sensor test...\n", SENSOR_OPTICAL_RAIN);
        SENSORS_ACTIVATE(interruption_sensor);
 
-       uint32_t counter = 0;
+       static uint32_t counter = 0;
 
        while (true) {
            PROCESS_YIELD();

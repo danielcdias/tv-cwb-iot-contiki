@@ -112,12 +112,10 @@ uint8_t ds18b20_probe(void) {
    OW_SET_INPUT();
    clock_delay_usec(64);
    result = !GPIO_readDio(DS18B20_PORT); //OW_GET_PIN_STATE()
-   //printf("ds18b20_probe result (1): %i\n", result);
    if (result) {
       clock_delay_usec(300);
       result = GPIO_readDio(DS18B20_PORT); //OW_GET_PIN_STATE()
    }
-   //printf("ds18b20_probe result (2): %i\n", result);
    return result;
 }
 

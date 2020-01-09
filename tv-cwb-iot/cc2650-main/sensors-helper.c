@@ -6,15 +6,16 @@
  * Implements the sensors-helper.h interface to configure and read from all
  * sensors used by the CC2650 board.
  *
- * All 5 rain sensors and the temperature sensor will use a GPIO port and the
- * reading will be performed by pooling.
+ * The temperature sensor will use a GPIO port and the reading will be performed by
+ * pooling.
  *
- * The moisture sensor will be used as ADC sensor.
+ * The moisture sensor and the rain on drain sensor will be used as ADC sensors.
  *
- * The pluviometer will use a interruption event, just like a button's
- * implementation for the CC2650 board.
- * The presence of this sensor will be defined by a jumper. When ON, indicates
- * the pluviometer is installed.
+ * The pluviometer and the rain optical sensor will use a interruption event, just
+ * like a button's implementation for the CC2650 board.
+ * The presence which sensor (pluviometer or rain optioncal) will be defined by a
+ * jumper. When ON, indicates the pluviometer is installed, otherwise, the rain
+ * optical sensor is installed.
  */
 
 #include <stdio.h>
@@ -40,14 +41,9 @@ static struct sensors_sensor *sensorMoisture;
 static struct timer reading_timer_ADS, reading_timer_tmp;
 
 /**
- * util.h header functions implementation
+ * sensors-helper.h header functions implementation
  */
 void configureGPIOSensors() {
-  IOCPinTypeGpioInput(RAIN_SENSOR_SURFACE_1);
-  IOCPinTypeGpioInput(RAIN_SENSOR_SURFACE_2);
-  IOCPinTypeGpioInput(RAIN_SENSOR_SURFACE_3);
-  IOCPinTypeGpioInput(RAIN_SENSOR_SURFACE_4);
-  IOCPinTypeGpioInput(RAIN_SENSOR_DRAIN);
   IOCPinTypeGpioInput(JUMPER_PLUVIOMETER_INSTALLED);
 }
 
@@ -93,8 +89,8 @@ uint32_t internalADSReadingAttemps(u_int32_t port) {
    return result;
 }
 
-uint32_t readADSMoistureSensor() {
-   return internalADSReadingAttemps(MOISTURE_SENSOR);
+uint32_t readADSSensor(uint32_t port) {
+   return internalADSReadingAttemps(port);
 }
 
 int readTemperatureSensor() {
