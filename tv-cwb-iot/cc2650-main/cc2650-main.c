@@ -40,6 +40,7 @@
 #include "simple-udp.h"
 #include "ti-lib.h"
 #include "dev/leds.h"
+#include "button-sensor.h"
 
 #define FIRMWARE_VERSION "01.02.00"
 
@@ -180,6 +181,9 @@ static bool is_pluviometer_installed = false;
 
 static bool is_dev_environment = false;
 
+static bool test_mode_on = false;
+static bool test_mode_available = true;
+
 /******************************************************************************
  * Processes definition
  ******************************************************************************/
@@ -188,10 +192,14 @@ PROCESS(mqttsn_process, "Configure Connection and Topic Registration");
 PROCESS(publish_process, "Register topic and publish data");
 PROCESS(ctrl_subscription_process, "Subscribe to a device control channel");
 PROCESS(inactivity_watchdog_process, "Monitor for network inactivity");
+
 PROCESS(reboot_process, "Reboots the board");
+
 PROCESS(green_led_process, "Controls green led indicator");
 PROCESS(red_led_process, "Controls ref led indicator");
+
 PROCESS(request_timestamp_update, "Send command requesting timestamp update");
+
 PROCESS(interruption_sensor_reset_interval_process, "Resets interruption sensor counter when time interval is reached");
 
 PROCESS(rain_sensor_drain_process, "Reads rain sensor on drain");
@@ -200,7 +208,9 @@ PROCESS(interruption_sensor_process, "Receives events from interruption sensor")
 
 PROCESS(report_board_general_status, "Reports board general status");
 
-AUTOSTART_PROCESSES(&mqttsn_process);
+PROCESS(detect_test_mode, "Detects if test mode was requested");
+
+AUTOSTART_PROCESSES(&mqttsn_process, &detect_test_mode);
 
 /******************************************************************************
  * Functions implementation
@@ -371,6 +381,10 @@ static void publish_board_status(char data[50]) {
 
 
 static void publish_sensor_status(const uint8_t topic_index, int data) {
+   if (test_mode_on) {
+      process_post(&inactivity_watchdog_process, network_inactivity_timeout_reset, NULL);
+      return;
+   }
    set_green_led(GREEN_LED_SENDING_MESSAGE);
    static char buf[64] = "\0";
    static uint8_t buf_len;
@@ -669,6 +683,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
                }
             }
             if (!is_rebooting) {
+               test_mode_available = false;
                publish_firmware_version();
                configureGPIOSensors();
                process_start(&report_board_general_status, NULL);
@@ -778,7 +793,7 @@ PROCESS_THREAD(green_led_process, ev, data) {
    processes_running++;
    static struct etimer et;
    leds_off(LEDS_GREEN);
-   while (!is_rebooting) {
+   while ((!is_rebooting) && (!test_mode_on)) {
       if (green_led_state == GREEN_LED_SENDING_MESSAGE) {
          leds_off(LEDS_GREEN);
       } else if (green_led_state == GREEN_LED_NO_MESSAGE) {
@@ -806,7 +821,7 @@ PROCESS_THREAD(red_led_process, ev, data) {
    processes_running++;
    static struct etimer et;
    leds_off(LEDS_RED);
-   while (!is_rebooting) {
+   while ((!is_rebooting) && (!test_mode_on)) {
       if (red_led_state == RED_LED_CONNECTING) {
          leds_toggle(LEDS_RED);
       } else if (red_led_state == RED_LED_CONNECTED) {
@@ -855,7 +870,7 @@ PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
             }
          }
          if (report_water_on_drain) {
-            printf("##### Rain Sensor on Drain - Water detected!\n");
+            PRINTF("##### Rain Sensor on Drain - Water detected!\n");
             report_water_on_drain = false;
             publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, WATER_ON_DRAIN);
             counter = 0;
@@ -893,7 +908,7 @@ PROCESS_THREAD(moisture_sensor_process, ev, data) {
          if ((first_temp_reading) && (temperatureSensorRead == 8500)) {
             first_temp_reading = false;
          } else {
-            printf("##### Moisture sensor - value read: %li ##### Temperature sensor - value read: %i\n", moistureSensorRead, temperatureSensorRead);
+            PRINTF("##### Moisture sensor - value read: %li ##### Temperature sensor - value read: %i\n", moistureSensorRead, temperatureSensorRead);
             publish_sensor_status(TOPIC_CAPACITIVE_SOIL_MOISTURE_SENSOR, moistureSensorRead);
             publish_sensor_status(TOPIC_TEMPERATURE_SENSOR, temperatureSensorRead);
          }
@@ -925,10 +940,10 @@ PROCESS_THREAD(interruption_sensor_process, ev, data) {
           if(data == &interruption_sensor) {
              interruption_counter++;
              if (is_pluviometer_installed) {
-                printf("##### Pluviometric Sensor event received!\n");
+                PRINTF("##### Pluviometric Sensor event received! Counter: %u.\n", interruption_counter);
                 publish_sensor_status(TOPIC_PLUVIOMETER, interruption_counter);
              } else {
-                printf("##### Optical Rain Sensor event received!\n");
+                PRINTF("##### Optical Rain Sensor event received! Counter: %u.\n", interruption_counter);
                 publish_sensor_status(TOPIC_OPTICAL_RAIN_SENSOR, interruption_counter);
              }
              process_post(&interruption_sensor_reset_interval_process, interruption_sensor_tic_event, NULL);
@@ -1035,6 +1050,73 @@ PROCESS_THREAD(report_board_general_status, ev, data) {
    }
 
    PRINTF("<<<--- Ending process thread 'report_board_general_status'\n");
+   processes_running--;
+   PROCESS_END();
+}
+
+PROCESS_THREAD(detect_test_mode, ev, data) {
+   PROCESS_BEGIN();
+
+   PRINTF("--->>> Starting process thread 'detect_test_mode'\n");
+   processes_running++;
+
+   SENSORS_ACTIVATE(button_sensor);
+
+   while ((!is_rebooting) && (test_mode_available)) {
+      PROCESS_YIELD();
+      if ((ev == sensors_event) && ((data == &button_left_sensor) || (data == &button_right_sensor))) {
+         PRINTF("\n***** ***** TEST MODE ON ***** *****\n\n");
+         test_mode_on = true;
+         break;
+      }
+   }
+
+   SENSORS_DEACTIVATE(button_sensor);
+
+   if (test_mode_on) {
+      static struct etimer et;
+      while (!is_rebooting) {
+         if (test_mode_available) {
+            // GREEN
+            leds_off(LEDS_RED);
+            leds_on(LEDS_GREEN);
+            etimer_set(&et, 0.5 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+            // RED
+            leds_off(LEDS_GREEN);
+            leds_on(LEDS_RED);
+            etimer_set(&et, 0.5 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+         } else {
+            // GREEN
+            leds_off(LEDS_RED);
+            leds_on(LEDS_GREEN);
+            etimer_set(&et, 0.2 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+            leds_off(LEDS_ALL);
+            etimer_set(&et, 0.1 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+            leds_off(LEDS_RED);
+            leds_on(LEDS_GREEN);
+            etimer_set(&et, 0.2 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+            // RED
+            leds_off(LEDS_GREEN);
+            leds_on(LEDS_RED);
+            etimer_set(&et, 0.2 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+            leds_off(LEDS_ALL);
+            etimer_set(&et, 0.1 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+            leds_off(LEDS_GREEN);
+            leds_on(LEDS_RED);
+            etimer_set(&et, 0.2 * CLOCK_SECOND);
+            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+         }
+      }
+   }
+
+   PRINTF("<<<--- Ending process thread 'detect_test_mode'\n");
    processes_running--;
    PROCESS_END();
 }
