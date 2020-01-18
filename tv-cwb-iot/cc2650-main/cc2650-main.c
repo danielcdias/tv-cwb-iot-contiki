@@ -65,8 +65,19 @@
 #define TOPIC_STA_GENERAL "/tvcwb1299/mmm/sta/%02X%02X"
 #define TOPIC_CMD "/tvcwb1299/mmm/cmd/%02X%02X"
 
-#define RAIN_SENSORS_STATUS_ARRAY_PLV "P%uP%u"
-#define RAIN_SENSORS_STATUS_ARRAY_SOC "O%uP%u"
+// Send board and sensores status
+// Format S000P000P00 or S000O000P00, where:
+// S = sensors, followed by an array of status:
+//    Pos 0 = SCR
+//    Pos 0 = SCU
+//    Pos 0 = TMP
+//    Values: 0 for OK, 9 for error
+// P (PLV) or O (SOC), followed by number of ticks detected at the moment
+// P (processes running in board), followed by the number of process
+#define BOARD_STATUS_ARRAY_PLV "S%u%u%uP%uP%u"
+#define BOARD_STATUS_ARRAY_SOC "S%u%u%uO%uP%u"
+#define SENSOR_READING_OK 0
+#define SENSOR_READING_ERROR 9
 
 #define FIRMWARE_VERSION_STATUS_ARRAY "FWV%s"
 
@@ -114,7 +125,7 @@
 #define PROD_ENVIRONMENT 0
 
 // Interval to report board general status
-#define REPORT_BOARD_GENERAL_STATUS_INTERVAL 2980 // 298 seconds
+#define REPORT_BOARD_GENERAL_STATUS_INTERVAL 295 // seconds
 
 /******************************************************************************
  * Global variables and structs definitions
@@ -183,6 +194,8 @@ static bool is_dev_environment = false;
 
 static bool test_mode_on = false;
 static bool test_mode_available = true;
+
+static uint8_t last_reading_ok[3];
 
 /******************************************************************************
  * Processes definition
@@ -361,6 +374,10 @@ static uint32_t get_current_timestamp() {
 }
 
 static void publish_board_status(char data[50]) {
+   if ((test_mode_on) && (strcmp(BOARD_STATUS_STARTED, data))) {
+      process_post(&inactivity_watchdog_process, network_inactivity_timeout_reset, NULL);
+      return;
+   }
    set_green_led(GREEN_LED_SENDING_MESSAGE);
    static uint8_t buf_len;
    static char buf[64] = "\0";
@@ -736,6 +753,7 @@ PROCESS_THREAD(inactivity_watchdog_process, ev, data) {
       PROCESS_WAIT_EVENT();
       if (ev == PROCESS_EVENT_TIMER) {
          if (etimer_expired(&inactivity_timer)) {
+            PRINTF("\n***** INACTIVITY DETECTED *****\n\n");
             reboot_board();
          }
       }
@@ -854,26 +872,38 @@ PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
 
    static bool water_detected = false, reported_last_rain = false, report_water_on_drain = false;
    static uint32_t counter = 0;
+   static uint16_t errors_counter = 0;
 
-   while (true) {
+   while ((!is_rebooting) && (is_connected)) {
 
       uint32_t value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
-      water_detected = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
-      if (water_detected) {
-         if ((interruption_counter > 0) && (!reported_last_rain)) {
-            reported_last_rain = true;
-            report_water_on_drain = true;
-         } else if (interruption_counter == 0) {
-            reported_last_rain = false;
-            if (counter > (MIN_INTERVAL_REPORT_WATER_ON_DRAIN / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
+      if (value_read == 0) {
+         errors_counter++;
+      }
+      if (errors_counter >= (MIN_INTERVAL_REPORT_WATER_ON_DRAIN / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
+         errors_counter = 0;
+         publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, READING_ERROR_STATUS);
+         last_reading_ok[0] = SENSOR_READING_ERROR;
+         PRINTF("##### Rain Sensor on Drain - ERROR detected!\n");
+      } else if (value_read >= MIN_VALUE_ACCEPTED_ADS) {
+         last_reading_ok[0] = SENSOR_READING_OK;
+         water_detected = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
+         if (water_detected) {
+            if ((interruption_counter > 0) && (!reported_last_rain)) {
+               reported_last_rain = true;
                report_water_on_drain = true;
+            } else if (interruption_counter == 0) {
+               reported_last_rain = false;
+               if (counter > (MIN_INTERVAL_REPORT_WATER_ON_DRAIN / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
+                  report_water_on_drain = true;
+               }
             }
-         }
-         if (report_water_on_drain) {
-            PRINTF("##### Rain Sensor on Drain - Water detected!\n");
-            report_water_on_drain = false;
-            publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, WATER_ON_DRAIN);
-            counter = 0;
+            if (report_water_on_drain) {
+               PRINTF("##### Rain Sensor on Drain - Water detected!\n");
+               report_water_on_drain = false;
+               publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, WATER_ON_DRAIN);
+               counter = 0;
+            }
          }
       }
 
@@ -901,10 +931,20 @@ PROCESS_THREAD(moisture_sensor_process, ev, data) {
    static uint32_t counter = 0;
 
    while ((!is_rebooting) && (is_connected)) {
-      if (counter >= MOISTURE_TEMP_READ_INTERVAL) {
+      if (counter >= (test_mode_on ? TEST_MODE_READING_INTERVAL : MOISTURE_TEMP_READ_INTERVAL)) {
          counter = 0;
          uint32_t moistureSensorRead = readADSSensor(MOISTURE_SENSOR);
          int temperatureSensorRead = readTemperatureSensor();
+         if (moistureSensorRead == 0) {
+            last_reading_ok[1] = SENSOR_READING_ERROR;
+         } else {
+            last_reading_ok[1] = SENSOR_READING_OK;
+         }
+         if (temperatureSensorRead == 0) {
+            last_reading_ok[2] = SENSOR_READING_ERROR;
+         } else {
+            last_reading_ok[2] = SENSOR_READING_OK;
+         }
          if ((first_temp_reading) && (temperatureSensorRead == 8500)) {
             first_temp_reading = false;
          } else {
@@ -999,6 +1039,8 @@ PROCESS_THREAD(interruption_sensor_reset_interval_process, ev, data) {
    PROCESS_END();
 }
 
+/********************************** GENERAL ***********************************/
+
 /**
  * Sends command requesting timestamp update every day
  */
@@ -1037,14 +1079,15 @@ PROCESS_THREAD(report_board_general_status, ev, data) {
       etimer_set(&et, CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
       counter++;
-      if (counter >= REPORT_BOARD_GENERAL_STATUS_INTERVAL) {
+      if (counter >= (test_mode_on ? TEST_MODE_READING_INTERVAL : REPORT_BOARD_GENERAL_STATUS_INTERVAL)) {
          counter = 0;
-         char rsa_values[10] = "\0";
-         if (is_pluviometer_installed) {
-            sprintf(rsa_values, RAIN_SENSORS_STATUS_ARRAY_PLV, interruption_counter, processes_running);
-         } else {
-            sprintf(rsa_values, RAIN_SENSORS_STATUS_ARRAY_SOC, interruption_counter, processes_running);
-         }
+         char rsa_values[13] = "\0";
+         sprintf(
+            rsa_values,
+            (is_pluviometer_installed ? BOARD_STATUS_ARRAY_PLV : BOARD_STATUS_ARRAY_SOC),
+            last_reading_ok[0], last_reading_ok[1], last_reading_ok[2],
+            interruption_counter, processes_running);
+         PRINTF("§§§§§ Board status: %s.\n", rsa_values);
          publish_board_status(rsa_values);
       }
    }
@@ -1074,44 +1117,38 @@ PROCESS_THREAD(detect_test_mode, ev, data) {
    SENSORS_DEACTIVATE(button_sensor);
 
    if (test_mode_on) {
+
+      static uint8_t leds_array[4][10] = {
+         {1, 1, 1, 1, 1, 0, 0, 0, 0, 0},
+         {0, 0, 0, 0, 0, 1, 1, 1, 1, 1},
+         {1, 1, 0, 1, 1, 0, 0, 0, 0, 0},
+         {0, 0, 0, 0, 0, 1, 1, 0, 1, 1}
+      };
+
+      static uint8_t counter = 0, led_green, led_red;
+
       static struct etimer et;
+
       while (!is_rebooting) {
-         if (test_mode_available) {
-            // GREEN
-            leds_off(LEDS_RED);
-            leds_on(LEDS_GREEN);
-            etimer_set(&et, 0.5 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
-            // RED
-            leds_off(LEDS_GREEN);
+         led_red = leds_array[(test_mode_available ? 0 : 2)][counter];
+         led_green = leds_array[(test_mode_available ? 1 : 3)][counter];
+
+         if (led_red) {
             leds_on(LEDS_RED);
-            etimer_set(&et, 0.5 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
          } else {
-            // GREEN
             leds_off(LEDS_RED);
+         }
+         if (led_green) {
             leds_on(LEDS_GREEN);
-            etimer_set(&et, 0.2 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
-            leds_off(LEDS_ALL);
-            etimer_set(&et, 0.1 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
-            leds_off(LEDS_RED);
-            leds_on(LEDS_GREEN);
-            etimer_set(&et, 0.2 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
-            // RED
+         } else {
             leds_off(LEDS_GREEN);
-            leds_on(LEDS_RED);
-            etimer_set(&et, 0.2 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
-            leds_off(LEDS_ALL);
-            etimer_set(&et, 0.1 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
-            leds_off(LEDS_GREEN);
-            leds_on(LEDS_RED);
-            etimer_set(&et, 0.2 * CLOCK_SECOND);
-            PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+         }
+
+         etimer_set(&et, 0.1 * CLOCK_SECOND);
+         PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+         counter++;
+         if (counter == 10) {
+            counter = 0;
          }
       }
    }

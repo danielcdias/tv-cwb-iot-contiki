@@ -55,12 +55,12 @@ PROCESS_THREAD(testRainCapacitiveDrainSensor, ev, data) {
    printf("# %s # ---------- Starting Rain on Drain Sensor test...\n", SENSOR_RAIN_DRAIN);
 
    static bool is_raining = false, previous = false;
+   static uint32_t value_read = 0;
 
    while (true) {
 
-      uint32_t value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
+      value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
       is_raining = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
-      // printf("Value read = %lu\n", value_read);
       if (previous ^ is_raining) {
          previous = is_raining;
          printf((is_raining ? "# %s # Water on drain DETECTED!\n" : "# %s # Water on drain detection STOPPED!\n"), SENSOR_RAIN_DRAIN);

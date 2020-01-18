@@ -160,6 +160,9 @@ main(void)
 
   leds_init();
 
+  leds_on(LEDS_RED);
+  leds_on(LEDS_GREEN);
+
   /*
    * Disable I/O pad sleep mode and open I/O latches in the AON IOC interface
    * This is only relevant when returning from shutdown (which is what froze
@@ -176,6 +179,11 @@ main(void)
   clock_init();
   rtimer_init();
   watchdog_init();
+  // TODO Mudar watchdog_start para cá
+  // Colocar watchdog_periodic a cada inicialização
+  watchdog_start();
+  leds_off(LEDS_RED);
+  leds_on(LEDS_GREEN);
   process_init();
 
   random_init(0x1234);
@@ -234,7 +242,12 @@ main(void)
 
   autostart_start(autostart_processes);
 
-  watchdog_start();
+  leds_on(LEDS_RED);
+  leds_off(LEDS_GREEN);
+
+  // TODO Retirar para resetar quando travar HW ou SW
+  // Para forçar reset, usar while (1);
+  //watchdog_start();
 
   fade(LEDS_ORANGE);
 
