@@ -112,6 +112,7 @@
 
 #define BOARD_STATUS_STARTED "STT"
 #define BOARD_STATUS_TIMESTAMP_UPDATE_REQUEST "TUR"
+#define BOARD_COMMAND_RESET "RST"
 
 #define TIMESTAMP_UPDATE_REQUEST_INTERVAL 86400 // 1 day in seconds
 
@@ -329,14 +330,17 @@ static void publish_receiver(struct mqtt_sn_connection *mqc, const uip_ipaddr_t 
    PRINTF("[E] Published message received: %s\n", incoming_packet.data);
    if (uip_htons(incoming_packet.topic_id) == pub_sensors_topic[TOPIC_CONTROL].topic_id) {
       if (incoming_packet.data[0] == 'T') {
-         PRINTF(">>> Timestamp from SERVER received!\n");
+         PRINTF("}}}}} Timestamp from SERVER received!\n");
          char timestamp_str[11] = "\0";
          memcpy(timestamp_str, &incoming_packet.data[1], 10);
-         // TODO Salvar dados recebidos na flash
          base_clock_seconds = clock_seconds();
          base_timestamp_from_server = atoi(timestamp_str);
+      } else  if (strcmp(BOARD_COMMAND_RESET, incoming_packet.data) == 0) {
+         PRINTF("\n*}*}*} Reset command received! {*{*{*\n\n");
+         reboot_board();
+      } else {
+         PRINTF("}}}}} Command not identified: '%s'.\n", incoming_packet.data);
       }
-      // TODO Incluir comando de reset
    } else {
       PRINTF("[E] Unknown publication received.\n");
    }

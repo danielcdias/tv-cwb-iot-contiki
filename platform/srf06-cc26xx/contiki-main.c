@@ -179,11 +179,10 @@ main(void)
   clock_init();
   rtimer_init();
   watchdog_init();
-  // TODO Mudar watchdog_start para cá
-  // Colocar watchdog_periodic a cada inicialização
-  watchdog_start();
+
   leds_off(LEDS_RED);
   leds_on(LEDS_GREEN);
+
   process_init();
 
   random_init(0x1234);
@@ -247,7 +246,7 @@ main(void)
 
   // TODO Retirar para resetar quando travar HW ou SW
   // Para forçar reset, usar while (1);
-  //watchdog_start();
+  watchdog_start();
 
   fade(LEDS_ORANGE);
 
