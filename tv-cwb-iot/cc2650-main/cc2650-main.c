@@ -42,7 +42,7 @@
 #include "dev/leds.h"
 #include "button-sensor.h"
 
-#define FIRMWARE_VERSION "01.02.00"
+#define FIRMWARE_VERSION "01.02.01"
 
 #define DEBUG 1
 
@@ -184,7 +184,7 @@ static struct ctimer connection_timer;
 static process_event_t connection_timeout_event;
 
 static process_event_t mqttsn_connack_event, network_inactivity_timeout_reset,
-         interruption_sensor_tic_event;
+         interruption_sensor_tic_event, test_mode_activation_ended;
 
 static uint8_t processes_running = 0;
 
@@ -336,6 +336,7 @@ static void publish_receiver(struct mqtt_sn_connection *mqc, const uip_ipaddr_t 
          base_clock_seconds = clock_seconds();
          base_timestamp_from_server = atoi(timestamp_str);
       }
+      // TODO Incluir comando de reset
    } else {
       PRINTF("[E] Unknown publication received.\n");
    }
@@ -701,6 +702,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
             }
             if (!is_rebooting) {
                test_mode_available = false;
+               process_post(&detect_test_mode, test_mode_activation_ended, NULL);
                publish_firmware_version();
                configureGPIOSensors();
                process_start(&report_board_general_status, NULL);
@@ -1100,6 +1102,8 @@ PROCESS_THREAD(report_board_general_status, ev, data) {
 PROCESS_THREAD(detect_test_mode, ev, data) {
    PROCESS_BEGIN();
 
+   test_mode_activation_ended = process_alloc_event();
+
    PRINTF("--->>> Starting process thread 'detect_test_mode'\n");
    processes_running++;
 
@@ -1111,6 +1115,9 @@ PROCESS_THREAD(detect_test_mode, ev, data) {
          PRINTF("\n***** ***** TEST MODE ON ***** *****\n\n");
          test_mode_on = true;
          break;
+      }
+      if ((ev == test_mode_activation_ended) && (!test_mode_available)) {
+         PRINTF("!!!!! Test mode activation ended.\n");
       }
    }
 
