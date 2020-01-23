@@ -74,8 +74,8 @@
 //    Values: 0 for OK, 9 for error
 // P (PLV) or O (SOC), followed by number of ticks detected at the moment
 // P (processes running in board), followed by the number of process
-#define BOARD_STATUS_ARRAY_PLV "S%u%u%uP%uP%u"
-#define BOARD_STATUS_ARRAY_SOC "S%u%u%uO%uP%u"
+#define BOARD_STATUS_ARRAY_PLV "%sS%u%u%uP%uP%uA%u"
+#define BOARD_STATUS_ARRAY_SOC "%sS%u%u%uO%uP%uA%u"
 #define SENSOR_READING_OK 0
 #define SENSOR_READING_ERROR 9
 
@@ -127,6 +127,52 @@
 
 // Interval to report board general status
 #define REPORT_BOARD_GENERAL_STATUS_INTERVAL 295 // seconds
+
+// Size of the array of process that has all processes status (running ot stopped)
+#define PROCESS_ARRAY_SIZE 14
+
+// Processes status
+#define PROCESS_RUNNING 1
+#define PROCESS_STOPPED 0
+
+// Process index name
+#define MQTTSN_PROCESS 0
+#define PUBLISH_PROCESS 1
+#define CTRL_SUBSCRIPTION_PROCESS 2
+#define WATCHDOG_PROCESS 3
+#define REBOOT_PROCESS 4
+#define GREEN_LED_PROCESS 5
+#define RED_LED_PROCESS 6
+#define REQUEST_TIMESTAMP_UPDATE_PROCESS 7
+#define INTERRUPTION_SENSOR_RESET_INTERVAL_PROCESS 8
+#define RAIN_SENSOR_DRAIN_PROCESS 9
+#define MOISTURE_SENSOR_PROCESS 10
+#define INTERRUPTION_SENSOR_PROCESS 11
+#define REPORT_BOARD_GENERAL_STATUS_PROCESS 12
+#define DETECT_TEST_MODE_PROCESS 13
+
+// Constant array with the expected processes status after controller is connected
+// Following the process index defined abover
+#define PROCESSES_AFTER_CONNECTION \
+   { \
+      PROCESS_RUNNING, \
+      PROCESS_STOPPED, \
+      PROCESS_STOPPED, \
+      PROCESS_RUNNING, \
+      PROCESS_STOPPED, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_RUNNING, \
+      PROCESS_STOPPED  \
+   }
+
+// Process array typedef
+typedef uint8_t bit_array_t[PROCESS_ARRAY_SIZE];
 
 /******************************************************************************
  * Global variables and structs definitions
@@ -195,8 +241,27 @@ static bool is_dev_environment = false;
 
 static bool test_mode_on = false;
 static bool test_mode_available = true;
+static bool ready_to_work = false;
 
 static uint8_t last_reading_ok[3];
+
+static bit_array_t process_status_array =
+   {
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED,
+      PROCESS_STOPPED
+   };
 
 /******************************************************************************
  * Processes definition
@@ -205,14 +270,14 @@ static uint8_t last_reading_ok[3];
 PROCESS(mqttsn_process, "Configure Connection and Topic Registration");
 PROCESS(publish_process, "Register topic and publish data");
 PROCESS(ctrl_subscription_process, "Subscribe to a device control channel");
-PROCESS(inactivity_watchdog_process, "Monitor for network inactivity");
+PROCESS(watchdog_process, "Watchdog for processes and network inactivity");
 
 PROCESS(reboot_process, "Reboots the board");
 
 PROCESS(green_led_process, "Controls green led indicator");
 PROCESS(red_led_process, "Controls ref led indicator");
 
-PROCESS(request_timestamp_update, "Send command requesting timestamp update");
+PROCESS(request_timestamp_update_process, "Send command requesting timestamp update");
 
 PROCESS(interruption_sensor_reset_interval_process, "Resets interruption sensor counter when time interval is reached");
 
@@ -220,11 +285,11 @@ PROCESS(rain_sensor_drain_process, "Reads rain sensor on drain");
 PROCESS(moisture_sensor_process, "Reads from capacitive soil moisture and temperature sensors");
 PROCESS(interruption_sensor_process, "Receives events from interruption sensor");
 
-PROCESS(report_board_general_status, "Reports board general status");
+PROCESS(report_board_general_status_process, "Reports board general status");
 
-PROCESS(detect_test_mode, "Detects if test mode was requested");
+PROCESS(detect_test_mode_process, "Detects if test mode was requested");
 
-AUTOSTART_PROCESSES(&mqttsn_process, &detect_test_mode);
+AUTOSTART_PROCESSES(&mqttsn_process, &detect_test_mode_process);
 
 /******************************************************************************
  * Functions implementation
@@ -252,6 +317,30 @@ void set_green_led(uint8_t value ) {
 void set_red_led(uint8_t value) {
    red_led_state = value;
 }
+
+uint16_t get_process_status() {
+    uint16_t result = 0, power = 1;
+    for (uint8_t i = 0; i < PROCESS_ARRAY_SIZE; i++ ) {
+        result += process_status_array[(PROCESS_ARRAY_SIZE -1) -i] * power;
+        power *= 2;
+    }
+    return result;
+}
+
+bool is_all_processes_running() {
+   static bool result = true;
+   static uint8_t i;
+   const uint8_t processes_after_connection[PROCESS_ARRAY_SIZE] = PROCESSES_AFTER_CONNECTION;
+   for (i = 0; i < PROCESS_ARRAY_SIZE; i++) {
+      if ((processes_after_connection[i] == PROCESS_RUNNING) &&
+               (process_status_array[i] == PROCESS_STOPPED)) {
+         result = false;
+         break;
+      }
+   }
+   return result;
+}
+
 
 /************************************ MQTT ************************************/
 
@@ -380,7 +469,7 @@ static uint32_t get_current_timestamp() {
 
 static void publish_board_status(char data[50]) {
    if ((test_mode_on) && (strcmp(BOARD_STATUS_STARTED, data))) {
-      process_post(&inactivity_watchdog_process, network_inactivity_timeout_reset, NULL);
+      process_post(&watchdog_process, network_inactivity_timeout_reset, NULL);
       return;
    }
    set_green_led(GREEN_LED_SENDING_MESSAGE);
@@ -395,7 +484,7 @@ static void publish_board_status(char data[50]) {
    PRINTF("Publishing at topic: %s -> msg: %s\n", pub_sensors_topic[TOPIC_STATUS_GENERAL].topic, buf);
    uint16_t result = mqtt_sn_send_publish(&mqtt_sn_c, pub_sensors_topic[TOPIC_STATUS_GENERAL].topic_id,
                        MQTT_SN_TOPIC_TYPE_NORMAL, buf, buf_len, qos, retain);
-   process_post(&inactivity_watchdog_process, network_inactivity_timeout_reset, NULL);
+   process_post(&watchdog_process, network_inactivity_timeout_reset, NULL);
    if (result == 0) {
       PRINTF("** Error publishing message **\n");
    }
@@ -404,7 +493,7 @@ static void publish_board_status(char data[50]) {
 
 static void publish_sensor_status(const uint8_t topic_index, int data) {
    if (test_mode_on) {
-      process_post(&inactivity_watchdog_process, network_inactivity_timeout_reset, NULL);
+      process_post(&watchdog_process, network_inactivity_timeout_reset, NULL);
       return;
    }
    set_green_led(GREEN_LED_SENDING_MESSAGE);
@@ -415,7 +504,7 @@ static void publish_sensor_status(const uint8_t topic_index, int data) {
    buf_len = strlen(buf);
    uint16_t result = mqtt_sn_send_publish(&mqtt_sn_c, pub_sensors_topic[topic_index].topic_id,
                         MQTT_SN_TOPIC_TYPE_NORMAL, buf, buf_len, qos, retain);
-   process_post(&inactivity_watchdog_process, network_inactivity_timeout_reset, NULL);
+   process_post(&watchdog_process, network_inactivity_timeout_reset, NULL);
    if (result == 0) {
       PRINTF("** Error publishing message **\n");
    }
@@ -427,6 +516,16 @@ static void publish_firmware_version() {
    publish_board_status(buf);
 }
 
+void report_board_status(bool reboot) {
+   char rsa_values[20] = "\0";
+   sprintf(
+      rsa_values,
+      (is_pluviometer_installed ? BOARD_STATUS_ARRAY_PLV : BOARD_STATUS_ARRAY_SOC), (reboot ? "R" : "N"),
+      last_reading_ok[0], last_reading_ok[1], last_reading_ok[2],
+      interruption_counter, processes_running, get_process_status());
+   PRINTF("§§§§§ Board status: %s.\n", rsa_values);
+   publish_board_status(rsa_values);
+}
 
 static void connection_timer_callback(void *mqc) {
    process_post(&mqttsn_process, connection_timeout_event, NULL);
@@ -491,8 +590,11 @@ static resolv_status_t set_connection_address(uip_ipaddr_t *ipaddr) {
  */
 PROCESS_THREAD(publish_process, ev, data) {
    PROCESS_BEGIN();
-   PRINTF("--->>> Starting process thread 'publish_process'\n");
+
+   process_status_array[PUBLISH_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'publish_process'\n");
+
    static uint8_t registration_tries, rreq_result, rreq_results = 0;
    static struct etimer send_timer;
 
@@ -529,8 +631,11 @@ PROCESS_THREAD(publish_process, ev, data) {
       are_sta_topics_registered = true;
       PRINTF("All topics registered.\n");
    }
+
    PRINTF("<<<--- Ending process thread 'publish_process'\n");
    processes_running--;
+   process_status_array[PUBLISH_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -539,8 +644,11 @@ PROCESS_THREAD(publish_process, ev, data) {
  */
 PROCESS_THREAD(ctrl_subscription_process, ev, data) {
    PROCESS_BEGIN();
-   PRINTF("--->>> Starting process thread 'ctrl_subscription_process'\n");
+
+   process_status_array[CTRL_SUBSCRIPTION_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'ctrl_subscription_process'\n");
+
    static uint8_t subscription_tries;
    static mqtt_sn_subscribe_request *sreq = &subreq;
    static struct etimer periodic_timer;
@@ -564,8 +672,11 @@ PROCESS_THREAD(ctrl_subscription_process, ev, data) {
           }
       }
    }
+
    PRINTF("<<<--- Ending process thread 'ctrl_subscription_process'\n");
    processes_running--;
+   process_status_array[CTRL_SUBSCRIPTION_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -575,8 +686,10 @@ PROCESS_THREAD(ctrl_subscription_process, ev, data) {
 PROCESS_THREAD(mqttsn_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'mqttsn_process'\n");
+   process_status_array[MQTTSN_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'mqttsn_process'\n");
+
    static struct etimer periodic_timer;
    static struct etimer et;
    static uip_ipaddr_t broker_addr,google_dns;
@@ -677,7 +790,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
          init_sensor_topics_array();
          process_start(&ctrl_subscription_process, NULL);
          process_start(&publish_process, NULL);
-         process_start(&inactivity_watchdog_process, NULL);
+         process_start(&watchdog_process, NULL);
          static uint8_t i = 0;
          while ((!is_rebooting) && ((!are_sta_topics_registered) || (!is_cmd_topic_registered))) {
             etimer_set(&et, 0.1 * CLOCK_SECOND);
@@ -706,11 +819,11 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
             }
             if (!is_rebooting) {
                test_mode_available = false;
-               process_post(&detect_test_mode, test_mode_activation_ended, NULL);
+               process_post(&detect_test_mode_process, test_mode_activation_ended, NULL);
                publish_firmware_version();
                configureGPIOSensors();
-               process_start(&report_board_general_status, NULL);
-               process_start(&request_timestamp_update, NULL);
+               process_start(&report_board_general_status_process, NULL);
+               process_start(&request_timestamp_update_process, NULL);
                process_start(&rain_sensor_drain_process, NULL);
                process_start(&moisture_sensor_process, NULL);
                is_pluviometer_installed = (readGPIOSensor(JUMPER_PLUVIOMETER_INSTALLED) == PLUVIOMETER_INSTALLED);
@@ -721,6 +834,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
                }
                process_start(&interruption_sensor_process, NULL);
                process_start(&interruption_sensor_reset_interval_process, NULL);
+               ready_to_work = true;
                etimer_set(&et, 2 * CLOCK_SECOND);
                while(!is_rebooting) {
                   PROCESS_WAIT_EVENT();
@@ -735,40 +849,62 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
          reboot_board();
       }
    }
+
    PRINTF("<<<--- Ending process thread 'mqttsn_process'\n");
    processes_running--;
+   process_status_array[MQTTSN_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
 /********************************** WATCHDOG **********************************/
 
 /**
- * Detects inactivity and call reboot_board() function.
+ * Detects network inactivity and process crash, calling reboot_board()
  */
-PROCESS_THREAD(inactivity_watchdog_process, ev, data) {
+PROCESS_THREAD(watchdog_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'inactivity_watchdog_process'\n");
+   process_status_array[WATCHDOG_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'watchdog_process'\n");
 
-   static struct etimer inactivity_timer;
+   static struct etimer et;
+
+   static uint32_t counter = 0;
 
    network_inactivity_timeout_reset = process_alloc_event();
-   etimer_set(&inactivity_timer, INACTIVITY_TIMEOUT);
+   etimer_set(&et, CLOCK_SECOND);
+
    while (!is_rebooting) {
       PROCESS_WAIT_EVENT();
-      if (ev == PROCESS_EVENT_TIMER) {
-         if (etimer_expired(&inactivity_timer)) {
+      if ((ev == PROCESS_EVENT_TIMER) && (counter >= INACTIVITY_TIMEOUT)) {
+         if (etimer_expired(&et)) {
             PRINTF("\n***** INACTIVITY DETECTED *****\n\n");
             reboot_board();
+            break;
          }
       }
       if (ev == network_inactivity_timeout_reset) {
-         etimer_restart(&inactivity_timer);
+         etimer_restart(&et);
+         counter = 0;
       }
+      if ((ready_to_work) && (!test_mode_on) && (!is_all_processes_running())) {
+         etimer_stop(&et);
+         PRINTF("\n***** PROCESS STOPPED DETECTED *****\n\n");
+         report_board_status(true);
+         etimer_set(&et, 3 * CLOCK_SECOND);
+         PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
+         reboot_board();
+         break;
+      }
+      counter++;
    }
-   PRINTF("<<<--- Ending process thread 'inactivity_watchdog_process'\n");
+
+   PRINTF("<<<--- Ending process thread 'watchdog_process'\n");
    processes_running--;
+   process_status_array[WATCHDOG_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -778,8 +914,10 @@ PROCESS_THREAD(inactivity_watchdog_process, ev, data) {
 PROCESS_THREAD(reboot_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'reboot_process'\n");
+   process_status_array[REBOOT_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'reboot_process'\n");
+
    static struct etimer et;
 
    set_red_led(RED_LED_OFF_REBOOTING);
@@ -801,8 +939,11 @@ PROCESS_THREAD(reboot_process, ev, data) {
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
    }
    loop_forever();
+
    PRINTF("<<<--- Ending process thread 'reboot_process'\n");
    processes_running--;
+   process_status_array[REBOOT_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -813,8 +954,12 @@ PROCESS_THREAD(reboot_process, ev, data) {
  */
 PROCESS_THREAD(green_led_process, ev, data) {
    PROCESS_BEGIN();
-   PRINTF("--->>> Starting process thread 'green_led_process'\n");
+
+   process_status_array[GREEN_LED_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'green_led_process'\n");
+
+
    static struct etimer et;
    leds_off(LEDS_GREEN);
    while ((!is_rebooting) && (!test_mode_on)) {
@@ -831,8 +976,11 @@ PROCESS_THREAD(green_led_process, ev, data) {
       etimer_set(&et, 0.1 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
    }
+
    PRINTF("<<<--- Ending process thread 'green_led_process'\n");
    processes_running--;
+   process_status_array[GREEN_LED_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -841,8 +989,11 @@ PROCESS_THREAD(green_led_process, ev, data) {
  */
 PROCESS_THREAD(red_led_process, ev, data) {
    PROCESS_BEGIN();
-   PRINTF("--->>> Starting process thread 'red_led_process'\n");
+
+   process_status_array[RED_LED_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'red_led_process'\n");
+
    static struct etimer et;
    leds_off(LEDS_RED);
    while ((!is_rebooting) && (!test_mode_on)) {
@@ -859,8 +1010,11 @@ PROCESS_THREAD(red_led_process, ev, data) {
       etimer_set(&et, 0.6 * CLOCK_SECOND);
       PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
    }
+
    PRINTF("<<<--- Ending process thread 'red_led_process'\n");
    processes_running--;
+   process_status_array[RED_LED_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -872,8 +1026,10 @@ PROCESS_THREAD(red_led_process, ev, data) {
 PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'rain_sensor_drain_process'\n");
+   process_status_array[RAIN_SENSOR_DRAIN_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'rain_sensor_drain_process'\n");
+
    static struct etimer et;
 
    static bool water_detected = false, reported_last_rain = false, report_water_on_drain = false;
@@ -920,6 +1076,8 @@ PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
 
    PRINTF("<<<--- Ending process thread 'rain_sensor_drain_process'\n");
    processes_running--;
+   process_status_array[RAIN_SENSOR_DRAIN_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -929,8 +1087,10 @@ PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
 PROCESS_THREAD(moisture_sensor_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'moisture_sensor_process'\n");
+   process_status_array[MOISTURE_SENSOR_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'moisture_sensor_process'\n");
+
    static struct etimer et;
 
    static bool first_temp_reading = true;
@@ -966,6 +1126,8 @@ PROCESS_THREAD(moisture_sensor_process, ev, data) {
 
    PRINTF("<<<--- Ending process thread 'moisture_sensor_process'\n");
    processes_running--;
+   process_status_array[MOISTURE_SENSOR_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -975,6 +1137,7 @@ PROCESS_THREAD(moisture_sensor_process, ev, data) {
 PROCESS_THREAD(interruption_sensor_process, ev, data) {
    PROCESS_BEGIN();
 
+   process_status_array[INTERRUPTION_SENSOR_PROCESS] = PROCESS_RUNNING;
    PRINTF("--->>> Starting process thread 'interruption_sensor_process'\n");
    processes_running++;
 
@@ -998,8 +1161,11 @@ PROCESS_THREAD(interruption_sensor_process, ev, data) {
    }
 
    SENSORS_DEACTIVATE(interruption_sensor);
+
    PRINTF("<<<--- Ending process thread 'interruption_sensor_process'\n");
    processes_running--;
+   process_status_array[INTERRUPTION_SENSOR_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -1009,8 +1175,10 @@ PROCESS_THREAD(interruption_sensor_process, ev, data) {
 PROCESS_THREAD(interruption_sensor_reset_interval_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'interruption_sensor_reset_interval_process'\n");
+   process_status_array[INTERRUPTION_SENSOR_RESET_INTERVAL_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'interruption_sensor_reset_interval_process'\n");
+
    static struct etimer et;
    static uint32_t counter = 0;
    interruption_sensor_tic_event = process_alloc_event();
@@ -1042,6 +1210,8 @@ PROCESS_THREAD(interruption_sensor_reset_interval_process, ev, data) {
 
    PRINTF("<<<--- Ending process thread 'interruption_sensor_reset_interval_process'\n");
    processes_running--;
+   process_status_array[INTERRUPTION_SENSOR_RESET_INTERVAL_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
@@ -1050,11 +1220,14 @@ PROCESS_THREAD(interruption_sensor_reset_interval_process, ev, data) {
 /**
  * Sends command requesting timestamp update every day
  */
-PROCESS_THREAD(request_timestamp_update, ev, data) {
+PROCESS_THREAD(request_timestamp_update_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'request_timestamp_update'\n");
+   process_status_array[REQUEST_TIMESTAMP_UPDATE_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'request_timestamp_update_process'\n");
+
+
    static struct etimer et;
    static uint32_t counter = 0;
 
@@ -1068,16 +1241,20 @@ PROCESS_THREAD(request_timestamp_update, ev, data) {
       }
    }
 
-   PRINTF("<<<--- Ending process thread 'request_timestamp_update'\n");
+   PRINTF("<<<--- Ending process thread 'request_timestamp_update_process'\n");
    processes_running--;
+   process_status_array[REQUEST_TIMESTAMP_UPDATE_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
-PROCESS_THREAD(report_board_general_status, ev, data) {
+PROCESS_THREAD(report_board_general_status_process, ev, data) {
    PROCESS_BEGIN();
 
-   PRINTF("--->>> Starting process thread 'report_board_general_status'\n");
+   process_status_array[REPORT_BOARD_GENERAL_STATUS_PROCESS] = PROCESS_RUNNING;
    processes_running++;
+   PRINTF("--->>> Starting process thread 'report_board_general_status_process'\n");
+
    static struct etimer et;
    static uint32_t counter = 0;
 
@@ -1087,29 +1264,25 @@ PROCESS_THREAD(report_board_general_status, ev, data) {
       counter++;
       if (counter >= (test_mode_on ? TEST_MODE_READING_INTERVAL : REPORT_BOARD_GENERAL_STATUS_INTERVAL)) {
          counter = 0;
-         char rsa_values[13] = "\0";
-         sprintf(
-            rsa_values,
-            (is_pluviometer_installed ? BOARD_STATUS_ARRAY_PLV : BOARD_STATUS_ARRAY_SOC),
-            last_reading_ok[0], last_reading_ok[1], last_reading_ok[2],
-            interruption_counter, processes_running);
-         PRINTF("§§§§§ Board status: %s.\n", rsa_values);
-         publish_board_status(rsa_values);
+         report_board_status(false);
       }
    }
 
-   PRINTF("<<<--- Ending process thread 'report_board_general_status'\n");
+   PRINTF("<<<--- Ending process thread 'report_board_general_status_process'\n");
    processes_running--;
+   process_status_array[REPORT_BOARD_GENERAL_STATUS_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
 
-PROCESS_THREAD(detect_test_mode, ev, data) {
+PROCESS_THREAD(detect_test_mode_process, ev, data) {
    PROCESS_BEGIN();
 
-   test_mode_activation_ended = process_alloc_event();
-
-   PRINTF("--->>> Starting process thread 'detect_test_mode'\n");
+   process_status_array[DETECT_TEST_MODE_PROCESS] = PROCESS_RUNNING;
+   PRINTF("--->>> Starting process thread 'detect_test_mode_process'\n");
    processes_running++;
+
+   test_mode_activation_ended = process_alloc_event();
 
    SENSORS_ACTIVATE(button_sensor);
 
@@ -1164,7 +1337,9 @@ PROCESS_THREAD(detect_test_mode, ev, data) {
       }
    }
 
-   PRINTF("<<<--- Ending process thread 'detect_test_mode'\n");
+   PRINTF("<<<--- Ending process thread 'detect_test_mode_process'\n");
    processes_running--;
+   process_status_array[DETECT_TEST_MODE_PROCESS] = PROCESS_STOPPED;
+
    PROCESS_END();
 }
