@@ -60,6 +60,7 @@ PROCESS_THREAD(testRainCapacitiveDrainSensor, ev, data) {
    while (true) {
 
       value_read = readADSSensor(RAIN_ON_DRAIN_SENSOR);
+      //printf(">>> Valeu read: %lu\n", value_read);
       is_raining = (value_read < RAIN_ON_DRAIN_DETECTION_MAX_VALUE);
       if (previous ^ is_raining) {
          previous = is_raining;

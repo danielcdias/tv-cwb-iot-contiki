@@ -42,7 +42,7 @@
 #include "dev/leds.h"
 #include "button-sensor.h"
 
-#define FIRMWARE_VERSION "01.02.01"
+#define FIRMWARE_VERSION "01.02.02"
 
 #define DEBUG 1
 
@@ -1042,7 +1042,10 @@ PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
       if (value_read == 0) {
          errors_counter++;
       }
-      if (errors_counter >= (MIN_INTERVAL_REPORT_WATER_ON_DRAIN / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
+      if (errors_counter >= ((
+            test_mode_on ?
+            MIN_INTERVAL_REPORT_WATER_ON_DRAIN_ON_TEST : MIN_INTERVAL_REPORT_WATER_ON_DRAIN)
+            / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
          errors_counter = 0;
          publish_sensor_status(TOPIC_RAIN_SENSOR_DRAIN, READING_ERROR_STATUS);
          last_reading_ok[0] = SENSOR_READING_ERROR;
@@ -1056,7 +1059,10 @@ PROCESS_THREAD(rain_sensor_drain_process, ev, data) {
                report_water_on_drain = true;
             } else if (interruption_counter == 0) {
                reported_last_rain = false;
-               if (counter > (MIN_INTERVAL_REPORT_WATER_ON_DRAIN / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
+               if (counter > ((
+                     test_mode_on ?
+                     MIN_INTERVAL_REPORT_WATER_ON_DRAIN_ON_TEST : MIN_INTERVAL_REPORT_WATER_ON_DRAIN)
+                     / READING_INTERVAL_RAIN_ON_DRAIN_SENSOR)) {
                   report_water_on_drain = true;
                }
             }
@@ -1191,7 +1197,9 @@ PROCESS_THREAD(interruption_sensor_reset_interval_process, ev, data) {
          counter = 0;
       }
       if (ev == PROCESS_EVENT_TIMER) {
-         if (counter >= INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET) {
+         if (counter >= (test_mode_on ?
+                  INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET_ON_TEST :
+                  INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET)) {
             if (interruption_counter > 0) {
                interruption_counter = 0;
                if (is_pluviometer_installed) {

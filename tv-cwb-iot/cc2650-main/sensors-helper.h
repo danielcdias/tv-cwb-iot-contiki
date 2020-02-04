@@ -62,6 +62,7 @@ RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 // Interruption sensor wait interval to reset
 // Pluviometer or Optiocal Rain Sensor
 #define INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET 900 // seconds
+#define INTERRUPTION_SENSOR_WAIT_INTERVAL_TO_RESET_ON_TEST 40 // seconds
 
 // Reading interval for rain on drain sensor
 #define RAIN_ON_DRAIN_READ_INTERVAL 0.1 // seconds
@@ -70,7 +71,8 @@ RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 #define RAIN_ON_DRAIN_DETECTION_MAX_VALUE 1000000
 
 // Minimum interval to report water detected again for rain on drain
-#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN 30 // seconds
+#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN 300 // seconds
+#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN_ON_TEST 30 // seconds
 
 // Reading interval for rain on drain sensor
 #define READING_INTERVAL_RAIN_ON_DRAIN_SENSOR 0.5 // seconds
