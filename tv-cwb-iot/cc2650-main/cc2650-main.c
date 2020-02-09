@@ -174,6 +174,19 @@
 // Process array typedef
 typedef uint8_t bit_array_t[PROCESS_ARRAY_SIZE];
 
+// Reason sent to board status message before watchdog reboot
+#define RESET_BY_COMMAND "C"
+#define RESET_BY_DISCONNECTION "D"
+#define RESET_BY_KEEP_ALIVE "K"
+#define RESET_BY_CANT_CONNECT "X"
+#define RESET_BY_TIMEOUT_REGISTER "T"
+#define RESET_BY_TIMEOUT_TIMESTAMP "S"
+#define RESET_BY_UNABLE_CONNECT "U"
+#define RESET_BY_INACTIVITY "I"
+#define RESET_BY_PROCESS_STOPPED "P"
+// Normal board status without reset
+#define NORMAL_BOARD_STATUS "N"
+
 /******************************************************************************
  * Global variables and structs definitions
  ******************************************************************************/
@@ -292,13 +305,21 @@ PROCESS(detect_test_mode_process, "Detects if test mode was requested");
 AUTOSTART_PROCESSES(&mqttsn_process, &detect_test_mode_process);
 
 /******************************************************************************
+ * Functions definition
+ ******************************************************************************/
+
+void reboot_board(char reason[2]);
+void report_board_status(char reason[2]);
+
+/******************************************************************************
  * Functions implementation
  ******************************************************************************/
 
 /*********************************** General **********************************/
 
-void reboot_board() {
+void reboot_board(char reason[2]) {
    is_rebooting = true;
+   report_board_status(reason);
    process_start(&reboot_process, NULL);
 }
 
@@ -426,7 +447,7 @@ static void publish_receiver(struct mqtt_sn_connection *mqc, const uip_ipaddr_t 
          base_timestamp_from_server = atoi(timestamp_str);
       } else  if (strcmp(BOARD_COMMAND_RESET, incoming_packet.data) == 0) {
          PRINTF("\n*}*}*} Reset command received! {*{*{*\n\n");
-         reboot_board();
+         reboot_board(RESET_BY_COMMAND);
       } else {
          PRINTF("}}}}} Command not identified: '%s'.\n", incoming_packet.data);
       }
@@ -442,13 +463,13 @@ static void pingreq_receiver(struct mqtt_sn_connection *mqc, const uip_ipaddr_t 
 static void disconnect_receiver(struct mqtt_sn_connection *mqc, const uip_ipaddr_t *source_addr, const uint8_t *data, uint16_t datalen) {
    PRINTF("[E] Disconnection received\n");
    is_connected = false;
-   reboot_board();
+   reboot_board(RESET_BY_DISCONNECTION);
 }
 
 static void keepalive_timeout_receiver(struct mqtt_sn_connection *mqc) {
    PRINTF("[E] Keepalive timeout received\n");
    is_connected = false;
-   reboot_board();
+   reboot_board(RESET_BY_KEEP_ALIVE);
 }
 
 static const struct mqtt_sn_callbacks mqtt_sn_call = {
@@ -516,11 +537,11 @@ static void publish_firmware_version() {
    publish_board_status(buf);
 }
 
-void report_board_status(bool reboot) {
+void report_board_status(char reason[2]) {
    char rsa_values[20] = "\0";
    sprintf(
       rsa_values,
-      (is_pluviometer_installed ? BOARD_STATUS_ARRAY_PLV : BOARD_STATUS_ARRAY_SOC), (reboot ? "R" : "N"),
+      (is_pluviometer_installed ? BOARD_STATUS_ARRAY_PLV : BOARD_STATUS_ARRAY_SOC), reason,
       last_reading_ok[0], last_reading_ok[1], last_reading_ok[2],
       interruption_counter, processes_running, get_process_status());
    PRINTF("§§§§§ Board status: %s.\n", rsa_values);
@@ -747,7 +768,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
          PROCESS_WAIT_EVENT();
          connection_retries++;
          if (connection_retries >= 15) {
-            reboot_board();
+            reboot_board(RESET_BY_CANT_CONNECT);
             break;
          }
       }
@@ -798,7 +819,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
             i++;
             if (i >= 200) {
                PRINTF("***** Taking too long to register topics...\n");
-               reboot_board();
+               reboot_board(RESET_BY_TIMEOUT_REGISTER);
                break;
             }
          }
@@ -813,7 +834,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
                i++;
                if (i >= 60) {
                   PRINTF("***** Taking too long to received base timestamp...\n");
-                  reboot_board();
+                  reboot_board(RESET_BY_TIMEOUT_TIMESTAMP);
                   break;
                }
             }
@@ -846,7 +867,7 @@ PROCESS_THREAD(mqttsn_process, ev, data) {
          }
       } else {
          PRINTF("Unable to connect!\n");
-         reboot_board();
+         reboot_board(RESET_BY_UNABLE_CONNECT);
       }
    }
 
@@ -881,7 +902,7 @@ PROCESS_THREAD(watchdog_process, ev, data) {
       if ((ev == PROCESS_EVENT_TIMER) && (counter >= INACTIVITY_TIMEOUT)) {
          if (etimer_expired(&et)) {
             PRINTF("\n***** INACTIVITY DETECTED *****\n\n");
-            reboot_board();
+            reboot_board(RESET_BY_INACTIVITY);
             break;
          }
       }
@@ -892,10 +913,7 @@ PROCESS_THREAD(watchdog_process, ev, data) {
       if ((ready_to_work) && (!test_mode_on) && (!is_all_processes_running())) {
          etimer_stop(&et);
          PRINTF("\n***** PROCESS STOPPED DETECTED *****\n\n");
-         report_board_status(true);
-         etimer_set(&et, 3 * CLOCK_SECOND);
-         PROCESS_WAIT_EVENT_UNTIL(ev = PROCESS_EVENT_TIMER);
-         reboot_board();
+         reboot_board(RESET_BY_PROCESS_STOPPED);
          break;
       }
       counter++;
@@ -1272,7 +1290,7 @@ PROCESS_THREAD(report_board_general_status_process, ev, data) {
       counter++;
       if (counter >= (test_mode_on ? TEST_MODE_READING_INTERVAL : REPORT_BOARD_GENERAL_STATUS_INTERVAL)) {
          counter = 0;
-         report_board_status(false);
+         report_board_status(NORMAL_BOARD_STATUS);
       }
    }
 
