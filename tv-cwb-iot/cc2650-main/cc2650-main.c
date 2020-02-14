@@ -42,7 +42,7 @@
 #include "dev/leds.h"
 #include "button-sensor.h"
 
-#define FIRMWARE_VERSION "01.02.03"
+#define FIRMWARE_VERSION "01.02.04"
 
 #define DEBUG 1
 
@@ -58,7 +58,7 @@
 
 #define REQUEST_RETRIES 10
 #define DEFAULT_SEND_INTERVAL (10 * CLOCK_SECOND)
-#define REPLY_TIMEOUT (3 * CLOCK_SECOND)
+#define REPLY_TIMEOUT (10 * CLOCK_SECOND)
 #define INACTIVITY_TIMEOUT (300 * CLOCK_SECOND)
 
 #define TOPIC_STA_SENSOR "/tvcwb1299/mmm/sta/%02X%02X/%s"
@@ -66,7 +66,8 @@
 #define TOPIC_CMD "/tvcwb1299/mmm/cmd/%02X%02X"
 
 // Send board and sensores status
-// Format S000P000P00 or S000O000P00, where:
+// Format XS000P0000P0000 or S000O0000P0000, where:
+// X is a letter with the board status in the moment of the report (reset reason as defined below)
 // S = sensors, followed by an array of status:
 //    Pos 0 = SCR
 //    Pos 0 = SCU
@@ -78,6 +79,19 @@
 #define BOARD_STATUS_ARRAY_SOC "%sS%u%u%uO%uP%uA%u"
 #define SENSOR_READING_OK 0
 #define SENSOR_READING_ERROR 9
+// Reason sent to board status message before watchdog reboot
+#define RESET_BY_COMMAND "C"
+#define RESET_BY_DISCONNECTION "D"
+#define RESET_BY_KEEP_ALIVE "K"
+#define RESET_BY_CANT_CONNECT "X"
+#define RESET_BY_TIMEOUT_REGISTER "T"
+#define RESET_BY_TIMEOUT_TIMESTAMP "S"
+#define RESET_BY_UNABLE_CONNECT "U"
+#define RESET_BY_INACTIVITY "I"
+#define RESET_BY_PROCESS_STOPPED "P"
+// Normal board status without reset
+#define NORMAL_BOARD_STATUS "N"
+
 
 #define FIRMWARE_VERSION_STATUS_ARRAY "FWV%s"
 
@@ -174,19 +188,6 @@
 // Process array typedef
 typedef uint8_t bit_array_t[PROCESS_ARRAY_SIZE];
 
-// Reason sent to board status message before watchdog reboot
-#define RESET_BY_COMMAND "C"
-#define RESET_BY_DISCONNECTION "D"
-#define RESET_BY_KEEP_ALIVE "K"
-#define RESET_BY_CANT_CONNECT "X"
-#define RESET_BY_TIMEOUT_REGISTER "T"
-#define RESET_BY_TIMEOUT_TIMESTAMP "S"
-#define RESET_BY_UNABLE_CONNECT "U"
-#define RESET_BY_INACTIVITY "I"
-#define RESET_BY_PROCESS_STOPPED "P"
-// Normal board status without reset
-#define NORMAL_BOARD_STATUS "N"
-
 /******************************************************************************
  * Global variables and structs definitions
  ******************************************************************************/
@@ -218,7 +219,7 @@ static struct mqtt_sn_connection mqtt_sn_c;
 static char mqtt_client_id[17];
 static struct topic_sensor_t pub_sensors_topic[TOTAL_TOPICS];
 static publish_packet_t incoming_packet;
-static uint16_t mqtt_keep_alive=10;
+static uint16_t mqtt_keep_alive=60;
 static int8_t qos = 1;
 static uint8_t retain = FALSE;
 static clock_time_t send_interval;
