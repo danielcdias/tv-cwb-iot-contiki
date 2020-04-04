@@ -68,10 +68,10 @@ RAIN_ON_DRAIN_SENSOR   Capacitive Soil Moisture Sensor
 #define RAIN_ON_DRAIN_READ_INTERVAL 0.1 // seconds
 
 // Max value read to detect rain. Any value below that indicates rain
-#define RAIN_ON_DRAIN_DETECTION_MAX_VALUE 1000000
+#define RAIN_ON_DRAIN_DETECTION_MAX_VALUE 900000
 
 // Minimum interval to report water detected again for rain on drain
-#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN 300 // seconds
+#define MIN_INTERVAL_REPORT_WATER_ON_DRAIN 3600 // seconds
 #define MIN_INTERVAL_REPORT_WATER_ON_DRAIN_ON_TEST 30 // seconds
 
 // Reading interval for rain on drain sensor
