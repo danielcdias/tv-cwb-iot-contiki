@@ -42,7 +42,7 @@
 #include "dev/leds.h"
 #include "button-sensor.h"
 
-#define FIRMWARE_VERSION "01.02.05"
+#define FIRMWARE_VERSION "01.02.06"
 
 #define DEBUG 1
 
